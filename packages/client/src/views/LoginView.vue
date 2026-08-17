@@ -282,4 +282,28 @@ async function handlePasswordLogin() {
     cursor: not-allowed;
   }
 }
+
+@media (min-width: 1024px) {
+  .login-view {
+    --login-overlay: rgba(10, 14, 23, 0.14);
+    --login-surface: rgba(20, 23, 32, 0.74);
+
+    align-items: stretch;
+    justify-content: flex-start;
+    padding: 0;
+  }
+
+  .login-card {
+    width: clamp(380px, 30vw, 420px);
+    max-width: none;
+    min-height: calc(100 * var(--vh));
+    padding: 56px 48px;
+    border-width: 0 1px 0 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    box-shadow: 24px 0 64px rgba(7, 10, 18, 0.24);
+  }
+}
 </style>
