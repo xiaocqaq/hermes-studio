@@ -22,4 +22,12 @@ describe('Device connections permissions', () => {
     expect(mcuRoutes).not.toContain('requireSuperAdmin')
     expect(deviceRoutes).toContain('deviceRoutes.use(requireSuperAdmin)')
   })
+
+  it('keeps device connections and API relay out of the page sidebar', () => {
+    const sidebar = readFileSync('packages/client/src/components/layout/PageSidebarNav.vue', 'utf8')
+
+    expect(sidebar).not.toContain("t('sidebar.connections')")
+    expect(sidebar).not.toContain("t('sidebar.apiRelay')")
+    expect(sidebar).not.toContain('apikey.fun')
+  })
 })

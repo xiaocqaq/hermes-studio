@@ -40,11 +40,6 @@ function openHistory() {
   void router.push({ name: 'hermes.history' })
 }
 
-function openConnections() {
-  if (props.active === 'connections') return
-  void router.push({ name: 'hermes.connections' })
-}
-
 function openGroupChat() {
   if (props.active === 'group') return
   void router.push({ name: 'hermes.groupChat' })
@@ -55,10 +50,6 @@ function openWorkflow() {
   void router.push({ name: 'hermes.workflow' })
 }
 
-function openApiRelay() {
-  if (typeof window === 'undefined') return
-  window.open('https://apikey.fun/register?aff=LIBAPI', '_blank', 'noopener,noreferrer')
-}
 </script>
 
 <template>
@@ -129,46 +120,6 @@ function openApiRelay() {
           <path d="M12 7v5l3 2" />
         </svg>
         <span>{{ historyButtonLabel }}</span>
-      </button>
-      <button
-        class="page-sidebar-tab"
-        :class="{ active: active === 'connections' }"
-        type="button"
-        :aria-current="active === 'connections' ? 'page' : undefined"
-        @click="openConnections"
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="18" cy="5" r="2.5" />
-          <circle cx="6" cy="12" r="2.5" />
-          <circle cx="18" cy="19" r="2.5" />
-          <path d="m8.2 10.7 7.6-4.4M8.2 13.3l7.6 4.4" />
-        </svg>
-        <span>{{ t('sidebar.connections') }}</span>
-      </button>
-      <button class="page-sidebar-tab" type="button" @click="openApiRelay">
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-        >
-          <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
-          <polyline points="15 3 21 3 21 9" />
-          <line x1="10" y1="14" x2="21" y2="3" />
-        </svg>
-        <span>{{ t('sidebar.apiRelay') }}</span>
       </button>
     </div>
     <div v-if="showModeSwitch" class="conversation-switch conversation-switch--three" role="tablist" aria-label="Conversation type">

@@ -113,10 +113,11 @@ describe('LoginView password login', () => {
     expect(mockReplace).toHaveBeenCalledWith(redirect)
   })
 
-  it('shows the default login hint', () => {
+  it('does not expose the default credentials', () => {
     const wrapper = mount(LoginView)
 
-    expect(wrapper.text()).toContain('login.defaultCredentialsHint')
+    expect(wrapper.text()).not.toContain('login.defaultCredentialsHint')
+    expect(wrapper.find('.login-default-hint').exists()).toBe(false)
   })
 
   it('shows an error when password login fails', async () => {

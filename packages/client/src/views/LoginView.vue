@@ -76,7 +76,6 @@ async function handlePasswordLogin() {
       </div>
       <h1 class="login-title">{{ t("login.title") }}</h1>
       <p class="login-desc">{{ t("login.description") }}</p>
-      <p class="login-default-hint">{{ t("login.defaultCredentialsHint") }}</p>
 
       <form class="login-form" @submit.prevent="handleLogin">
         <input
@@ -118,20 +117,53 @@ async function handlePasswordLogin() {
 @use "@/styles/variables" as *;
 
 .login-view {
-  height: calc(100 * var(--vh));
+  --login-overlay: rgba(10, 14, 23, 0.34);
+  --login-surface: rgba(20, 23, 32, 0.64);
+  --login-border: rgba(255, 255, 255, 0.24);
+  --login-text: #ffffff;
+  --login-text-muted: rgba(255, 255, 255, 0.76);
+  --login-input-surface: rgba(255, 255, 255, 0.76);
+  --login-input-surface-focus: rgba(255, 255, 255, 0.9);
+  --login-input-text: #171923;
+  --login-input-placeholder: rgba(23, 25, 35, 0.62);
+  --login-focus-ring: rgba(255, 255, 255, 0.4);
+
+  position: relative;
+  min-height: calc(100 * var(--vh));
+  width: 100%;
+  padding: 32px 16px;
+  box-sizing: border-box;
+  overflow: auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: $bg-primary;
+  background-image: url("@/assets/login-background.webp");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--login-overlay);
+    pointer-events: none;
+  }
 }
 
 .login-card {
+  position: relative;
+  z-index: 1;
   width: 480px;
   max-width: calc(100vw - 32px);
   padding: 56px;
-  border: 1px solid $border-color;
+  box-sizing: border-box;
+  border: 1px solid var(--login-border);
   border-radius: $radius-lg;
-  background: $bg-card;
+  background: var(--login-surface);
+  box-shadow: 0 24px 64px rgba(7, 10, 18, 0.28);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   text-align: center;
 
   @media (max-width: $breakpoint-mobile) {
@@ -141,27 +173,27 @@ async function handlePasswordLogin() {
 
 .login-logo {
   margin-bottom: 24px;
+
+  img {
+    display: block;
+    margin: 0 auto;
+    border-radius: $radius-lg;
+    box-shadow: 0 8px 24px rgba(7, 10, 18, 0.24);
+  }
 }
 
 .login-title {
   font-size: 26px;
   font-weight: 600;
-  color: $text-primary;
+  color: var(--login-text);
   margin: 0 0 10px;
 }
 
 .login-desc {
   font-size: 14px;
-  color: $text-muted;
+  color: var(--login-text-muted);
   margin: 0 0 12px;
   line-height: 1.6;
-}
-
-.login-default-hint {
-  margin: 0 0 28px;
-  font-family: $font-code;
-  font-size: 13px;
-  color: $text-secondary;
 }
 
 .login-form {
@@ -173,37 +205,42 @@ async function handlePasswordLogin() {
 .login-input {
   width: 100%;
   padding: 14px 16px;
-  border: 1px solid $border-color;
+  border: 1px solid rgba(255, 255, 255, 0.54);
   border-radius: $radius-sm;
-  font-size: 15px;
-  color: $text-primary;
-  background: $bg-input;
+  font-size: 16px;
+  color: var(--login-input-text);
+  background: var(--login-input-surface);
   outline: none;
-  transition: border-color $transition-fast;
+  transition:
+    background-color $transition-fast,
+    border-color $transition-fast,
+    box-shadow $transition-fast;
   box-sizing: border-box;
   font-family: $font-code;
 
   &::placeholder {
-    color: $text-muted;
+    color: var(--login-input-placeholder);
   }
 
   &:focus {
-    border-color: $accent-primary;
+    border-color: var(--login-text);
+    background: var(--login-input-surface-focus);
+    box-shadow: 0 0 0 3px var(--login-focus-ring);
   }
 }
 
 .login-error {
   font-size: 13px;
-  color: $error;
+  color: #ffe0e0;
   text-align: start;
 }
 
 .login-lock-hint {
   padding: 10px 12px;
-  border: 1px solid rgba(var(--warning-rgb), 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: $radius-sm;
-  background: rgba(var(--warning-rgb), 0.08);
-  color: $text-secondary;
+  background: rgba(10, 14, 23, 0.5);
+  color: var(--login-text-muted);
   font-size: 12px;
   line-height: 1.5;
   text-align: start;
@@ -211,7 +248,7 @@ async function handlePasswordLogin() {
   code {
     display: block;
     margin-top: 4px;
-    color: $text-primary;
+    color: var(--login-text);
     font-family: $font-code;
     word-break: break-all;
   }
@@ -220,17 +257,24 @@ async function handlePasswordLogin() {
 .login-btn {
   width: 100%;
   padding: 14px;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: $radius-sm;
-  background: $text-primary;
-  color: var(--text-on-accent);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--login-input-text);
   font-size: 15px;
   font-weight: 500;
   cursor: pointer;
-  transition: opacity $transition-fast;
+  transition:
+    background-color $transition-fast,
+    box-shadow $transition-fast;
 
   &:hover {
-    opacity: 0.85;
+    background: var(--login-text);
+  }
+
+  &:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--login-focus-ring);
   }
 
   &:disabled {
