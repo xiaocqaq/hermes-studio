@@ -117,8 +117,8 @@ async function handlePasswordLogin() {
 @use "@/styles/variables" as *;
 
 .login-view {
-  --login-overlay: rgba(10, 14, 23, 0.34);
-  --login-surface: rgba(20, 23, 32, 0.64);
+  --login-overlay: rgba(10, 14, 23, 0.14);
+  --login-surface: rgba(20, 23, 32, 0.32);
   --login-border: rgba(255, 255, 255, 0.24);
   --login-text: #ffffff;
   --login-text-muted: rgba(255, 255, 255, 0.76);
@@ -168,6 +168,22 @@ async function handlePasswordLogin() {
 
   @media (max-width: $breakpoint-mobile) {
     padding: 32px 24px;
+    --login-input-surface: rgba(255, 255, 255, 0.58);
+    --login-input-surface-focus: rgba(255, 255, 255, 0.72);
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+
+    .login-title,
+    .login-desc {
+      text-shadow: 0 2px 12px rgba(7, 10, 18, 0.86);
+    }
+
+    .login-desc {
+      color: rgba(255, 255, 255, 0.94);
+    }
   }
 }
 

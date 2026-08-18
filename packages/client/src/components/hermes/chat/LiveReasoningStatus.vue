@@ -93,7 +93,7 @@ const { t } = useI18n()
   display: inline-flex;
   align-items: center;
   color: transparent;
-  background: linear-gradient(105deg, $text-secondary 0%, $text-secondary 39%, #ffffff 48%, #ffffff 52%, $text-secondary 61%, $text-secondary 100%);
+  background: linear-gradient(105deg, $text-secondary 0%, $text-secondary 39%, $text-primary 48%, $text-primary 52%, $text-secondary 61%, $text-secondary 100%);
   background-size: 300% 100%;
   background-position: 0% 0;
   -webkit-background-clip: text;
@@ -107,21 +107,13 @@ const { t } = useI18n()
   transform: translateZ(0);
   will-change: background-position;
 
-  .dark & {
-    background: linear-gradient(105deg, #f0f0f0 0%, #f0f0f0 37%, #2f3540 47%, #2f3540 53%, #f0f0f0 63%, #f0f0f0 100%);
-    background-size: 300% 100%;
-    background-position: 0% 0;
-    -webkit-background-clip: text;
-    background-clip: text;
-    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.16));
-  }
 }
 
 .thinking-status-time {
   display: inline-flex;
   align-items: center;
   margin-top: 2px;
-  color: $text-muted;
+  color: $text-secondary;
   font-family: $font-code;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -136,12 +128,11 @@ const { t } = useI18n()
   box-sizing: border-box;
   padding: 7px 10px;
   border-radius: $radius-sm;
-  background: rgba(0, 0, 0, 0.025);
-  color: $text-secondary;
-
-  .dark & {
-    background: rgba(255, 255, 255, 0.045);
-  }
+  background: rgba(var(--bg-main-surface-rgb), 0.82);
+  color: $text-primary;
+  box-shadow: inset 0 0 0 1px rgba(var(--text-primary-rgb), 0.18);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .live-reasoning-label {
@@ -149,17 +140,17 @@ const { t } = useI18n()
   align-items: center;
   gap: 5px;
   margin-bottom: 4px;
-  color: $text-muted;
-  font-size: 11px;
+  color: $text-secondary;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .live-reasoning-body {
   max-height: 220px;
   overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.55;
-  opacity: 0.9;
+  color: $text-primary;
+  font-size: 14px;
+  line-height: 1.6;
 
   :deep(.markdown-body > :first-child) {
     margin-top: 0;

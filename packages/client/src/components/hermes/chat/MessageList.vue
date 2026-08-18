@@ -1620,11 +1620,14 @@ defineExpose({
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  font-size: 11px;
-  color: $text-secondary;
+  font-size: 12px;
+  color: $text-primary;
   padding: 3px 8px;
-  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(var(--text-primary-rgb), 0.18);
+  background: rgba(var(--bg-main-surface-rgb), 0.82);
   border-radius: $radius-sm;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 
   &.subagent-entry {
     cursor: pointer;
@@ -1636,13 +1639,9 @@ defineExpose({
     }
   }
 
-  .dark & {
-    background: rgba(255, 255, 255, 0.06);
-  }
-
   &.compression-item {
-    color: $text-muted;
-    font-size: 10px;
+    color: $text-secondary;
+    font-size: 11px;
 
     .tool-call-name {
       flex: 1 1 auto;
@@ -1656,7 +1655,7 @@ defineExpose({
 
   .tool-call-icon {
     flex-shrink: 0;
-    color: $text-muted;
+    color: $text-secondary;
   }
 
   .tool-call-name {
@@ -1677,14 +1676,14 @@ defineExpose({
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: none;
-    color: $text-muted;
+    color: $text-secondary;
   }
 }
 
 .tool-call-spinner {
   width: 10px;
   height: 10px;
-  border: 1.5px solid $text-muted;
+  border: 1.5px solid $text-secondary;
   border-top-color: transparent;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
@@ -1701,8 +1700,8 @@ defineExpose({
 }
 
 .tool-call-duration {
-  font-size: 10px;
-  color: $text-muted;
+  font-size: 11px;
+  color: $text-secondary;
   font-family: $font-code;
   margin-inline-start: 4px;
   flex-shrink: 0;

@@ -1585,8 +1585,8 @@ onBeforeUnmount(() => {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
-    color: $text-muted;
+    font-size: 12px;
+    color: $text-secondary;
     cursor: pointer;
     padding: 2px 4px;
     border-radius: $radius-sm;
@@ -1617,17 +1617,22 @@ onBeforeUnmount(() => {
   }
 
   .thinking-meta {
-    color: $text-muted;
+    color: $text-secondary;
     font-variant-numeric: tabular-nums;
   }
 
   .thinking-body {
     margin-top: 6px;
     padding: 6px 10px;
-    border-inline-start: 2px solid $border-light;
-    font-size: 13px;
-    opacity: 0.85;
-    font-style: italic;
+    border: 1px solid rgba(var(--text-primary-rgb), 0.18);
+    border-inline-start: 2px solid $accent-primary;
+    border-radius: $radius-sm;
+    background: rgba(var(--bg-main-surface-rgb), 0.82);
+    color: $text-primary;
+    font-size: 14px;
+    font-style: normal;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
 
     :deep(p) { margin: 0.3em 0; }
   }
@@ -1798,9 +1803,9 @@ onBeforeUnmount(() => {
 }
 
 .tool-detail-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  color: $text-muted;
+  color: $text-secondary;
   text-transform: uppercase;
   letter-spacing: 0.3px;
   margin-bottom: 2px;
@@ -1837,9 +1842,11 @@ onBeforeUnmount(() => {
   padding: 8px 10px;
   border: 1px solid $border-light;
   border-radius: $radius-sm;
-  background: rgba(var(--text-primary-rgb), 0.035);
-  color: $text-secondary;
-  font-size: 12px;
+  background: rgba(var(--bg-main-surface-rgb), 0.82);
+  color: $text-primary;
+  font-size: 13px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 
   :deep(.markdown-body > :first-child) {
     margin-top: 0;
