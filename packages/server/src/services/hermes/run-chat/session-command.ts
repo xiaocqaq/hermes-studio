@@ -688,6 +688,11 @@ export async function handleSessionCommand(
         }
         const deleted = clearSessionMessages(sessionId)
         state.messages = []
+        state.messageTotal = 0
+        state.messageLoadedCount = 0
+        state.messageStateBaselineCount = 0
+        state.hasMoreBefore = false
+        state.backgroundContinuationContexts = undefined
         clearTransientRunState(state)
         await calcAndUpdateUsage(sessionId, state, (event, payload) => {
           emitToSession(ctx.nsp, ctx.socket, sessionId, event, payload)
@@ -963,6 +968,7 @@ export async function handleSessionCommand(
         state.bridgeOutput = undefined
         state.bridgePendingTools = undefined
         state.bridgeCompressionResults = undefined
+        state.backgroundContinuationContexts = undefined
         replaceState(ctx.sessionMap, sessionId, 'session.command', {
           event: 'session.command',
           action: 'destroy',
@@ -1212,6 +1218,7 @@ function createBranchSession(parentSessionId: string, requestedTitle: string, ct
     model: parent.model || ctx.model || '',
     provider: parent.provider || ctx.provider || '',
     api_mode: parent.api_mode || '',
+    reasoning_effort: parent.reasoning_effort || '',
     title,
     parent_session_id: parentSessionId,
     workspace: parent.workspace || undefined,
