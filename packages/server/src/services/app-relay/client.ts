@@ -139,6 +139,8 @@ export interface StartAppRelayClientOptions {
   relayUrl?: string
   machineId: string
   publicKey: string
+  replaceExistingHost?: boolean
+  signChallenge?: (nonce: string, timestamp: number) => Promise<string>
   machineInfo?: Record<string, unknown>
   localBaseUrl?: string
   fetchImpl?: typeof fetch
@@ -200,7 +202,7 @@ export class AppRelayClient {
       auth: async (callback) => {
         const nonce = randomUUID()
         const timestamp = Date.now()
-        const signature = await createDeviceSignature(nonce, timestamp)
+        const signature = await this.options.signChallenge(nonce, timestamp)
         callback({
           role: 'host',
           machineId: this.options.machineId,
@@ -209,6 +211,7 @@ export class AppRelayClient {
           nonce,
           timestamp,
           signature,
+          replaceExistingHost: this.options.replaceExistingHost,
           machine: this.options.machineInfo,
         })
       },
@@ -221,6 +224,10 @@ export class AppRelayClient {
     })
 
     this.socket.on('connect', () => {
+      // Every Socket.IO connection represents a new relay-side host session.
+      // Preconnections are held in relay process memory, so anything cached by
+      // Studio before a disconnect cannot be reused safely after reconnecting.
+      this.clearRelaySessionState()
       this.preconnectionExpired = false
       logger.info({ relayUrl: this.redactedRelayUrl(), machineId: this.options.machineId }, '[app-relay] connected')
     })
@@ -229,6 +236,7 @@ export class AppRelayClient {
     })
     this.socket.on('disconnect', (reason: string) => {
       this.closeLocalBridges()
+      this.clearRelaySessionState()
       logger.info({ reason, relayUrl: this.redactedRelayUrl() }, '[app-relay] disconnected')
     })
     this.socket.on('relay.replaced', () => this.stop())
@@ -280,6 +288,7 @@ export class AppRelayClient {
 
   stop(): void {
     this.closeLocalBridges()
+    this.clearRelaySessionState()
     this.socket?.disconnect()
     this.socket = null
   }
@@ -290,6 +299,14 @@ export class AppRelayClient {
 
   isPreconnectionExpired(): boolean {
     return this.preconnectionExpired
+  }
+
+  usesRelayUrl(relayUrl: string): boolean {
+    try {
+      return this.relayUrl === resolveAppRelayUrl(relayUrl)
+    } catch {
+      return false
+    }
   }
 
   status(): { connected: boolean; machineId: string; pairingCode: string; pairingExpiresAt: number } {
@@ -364,7 +381,10 @@ export class AppRelayClient {
     now = Math.floor(Date.now() / 1000),
   ): CloudAppPreconnection | null {
     for (const [preconnectId, pending] of this.pendingPreconnections.entries()) {
-      if (pending.preconnection.hardExpiresAt <= now) {
+      if (
+        pending.preconnection.expiresAt <= now
+        || pending.preconnection.hardExpiresAt <= now
+      ) {
         this.pendingPreconnections.delete(preconnectId)
         continue
       }
@@ -575,6 +595,13 @@ export class AppRelayClient {
     }
   }
 
+  private clearRelaySessionState(): void {
+    this.pendingPreconnections.clear()
+    this.cloudConnectionOnline.clear()
+    this.pairingCode = ''
+    this.pairingExpiresAt = 0
+  }
+
   private async authorizeCloudConnection(request: Record<string, unknown>): Promise<Record<string, unknown>> {
     const preconnectId = String(request.preconnectId || request.preconnect_id || '').trim()
     const matchingCode = String(request.matchingCode || request.matching_code || '').trim()
@@ -734,6 +761,8 @@ export function startAppRelayClient(options: StartAppRelayClientOptions): AppRel
     relayUrl,
     machineId,
     publicKey,
+    replaceExistingHost: options.replaceExistingHost ?? true,
+    signChallenge: options.signChallenge || createDeviceSignature,
     machineInfo: options.machineInfo,
     localBaseUrl: options.localBaseUrl || `http://127.0.0.1:${config.port}`,
     fetchImpl: options.fetchImpl || fetch,

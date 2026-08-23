@@ -30,8 +30,10 @@ const { toolTraceVisible, toggleToolTraceVisible } = useToolTraceVisibility()
 
 const props = withDefaults(defineProps<{
   modelLabel?: string
+  modelDisabled?: boolean
 }>(), {
   modelLabel: '',
+  modelDisabled: false,
 })
 
 const emit = defineEmits<{
@@ -92,6 +94,7 @@ function onReasoningEffortSliderChange(value: number | [number, number]) {
 }
 
 function handleModelButtonClick() {
+  if (props.modelDisabled) return
   emit('modelClick')
 }
 
@@ -813,7 +816,7 @@ function formatTokens(n: number): string {
 
 // --- File attachment helpers ---
 
-function addFile(file: File, context?: string) {
+function addFile(file: File) {
   if (attachments.value.find(a => a.name === file.name)) return
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   const url = URL.createObjectURL(file)
@@ -824,18 +827,12 @@ function addFile(file: File, context?: string) {
     size: file.size,
     url,
     file,
-    ...(context?.trim() ? { context: context.trim() } : {}),
   })
 }
 
 function addFiles(files: File[]) {
   for (const file of files) addFile(file)
   if (files.length > 0) textareaRef.value?.focus()
-}
-
-function addBrowserAttachment(file: File, context: string) {
-  addFile(file, context)
-  textareaRef.value?.focus()
 }
 
 function handleAttachClick() {
@@ -889,7 +886,17 @@ function handleDrop(e: DragEvent) {
   addFiles(files)
 }
 
-defineExpose({ addFiles, addBrowserAttachment })
+/**
+ * Put the caret in the composer so the next keystroke lands in the message box.
+ * Refused on a phone, where taking focus raises the on-screen keyboard over the
+ * conversation the user just opened.
+ */
+function focusComposer() {
+  if (isMobileViewport.value) return
+  nextTick(() => textareaRef.value?.focus())
+}
+
+defineExpose({ addFiles, focusComposer })
 
 // --- Send ---
 
@@ -1186,6 +1193,9 @@ function isImage(type: string): boolean {
                 <span>{{ reasoningEffortOptions[0].label }}</span>
                 <span>{{ reasoningEffortOptions[reasoningEffortOptions.length - 1].label }}</span>
               </div>
+              <div class="reasoning-effort-slider-hint">
+                {{ t('chat.reasoningEffort.dragHint', { count: reasoningEffortOptions.length }) }}
+              </div>
             </div>
           </NPopover>
 
@@ -1223,6 +1233,7 @@ function isImage(type: string): boolean {
                 quaternary
                 size="tiny"
                 class="input-model-button"
+                :disabled="props.modelDisabled"
                 :title="isMobileViewport ? undefined : props.modelLabel || t('models.selectModel')"
                 :aria-label="props.modelLabel || t('models.selectModel')"
                 @click="handleModelButtonClick"
@@ -1635,6 +1646,13 @@ function isImage(type: string): boolean {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.reasoning-effort-slider-hint {
+  margin-top: 6px;
+  color: $text-muted;
+  font-size: 11px;
+  text-align: center;
 }
 
 .reasoning-effort-slider-heading {
