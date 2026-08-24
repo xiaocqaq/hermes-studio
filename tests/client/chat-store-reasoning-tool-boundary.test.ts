@@ -27,6 +27,7 @@ vi.mock('@/api/hermes/chat', () => ({
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
   onSessionSettingsUpdated: vi.fn(() => vi.fn()),
+  onSessionActivity: vi.fn(() => vi.fn()),
 }))
 
 vi.mock('@/api/client', () => ({

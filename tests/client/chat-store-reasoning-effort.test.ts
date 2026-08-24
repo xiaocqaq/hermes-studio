@@ -9,6 +9,7 @@ const chatApi = vi.hoisted(() => ({
   unregisterSessionHandlers: vi.fn(),
   getChatRunSocket: vi.fn(() => ({ emit: vi.fn() })),
   onSessionSettingsUpdated: vi.fn(() => vi.fn()),
+  onSessionActivity: vi.fn(() => vi.fn()),
 }))
 const sessionsApi = vi.hoisted(() => ({
   fetchSessions: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('@/api/hermes/chat', () => ({
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
   onSessionSettingsUpdated: chatApi.onSessionSettingsUpdated,
+  onSessionActivity: chatApi.onSessionActivity,
 }))
 
 vi.mock('@/api/client', () => ({
