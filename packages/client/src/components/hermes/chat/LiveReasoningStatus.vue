@@ -163,7 +163,6 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   contain: paint;
   transform: translateZ(0);
   will-change: background-position;
-
 }
 
 .thinking-status-time {
@@ -224,9 +223,8 @@ onBeforeUnmount(() => cancelAnimationFrame(scrollFrame))
   white-space: nowrap;
   text-overflow: clip;
   color: $text-primary;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 20px;
-  opacity: 0.9;
   scrollbar-width: none;
 
   &::-webkit-scrollbar {

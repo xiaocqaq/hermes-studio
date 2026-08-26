@@ -1,4 +1,5 @@
 import router from '@/router'
+import { clearMessageCache } from '@/utils/hermes/message-cache'
 
 const DEFAULT_BASE_URL = ''
 const ACTIVE_PROFILE_STORAGE_KEY = 'hermes_active_profile_name'
@@ -38,6 +39,9 @@ export function setApiKey(key: string) {
 
 export function clearApiKey() {
   localStorage.removeItem('hermes_api_key')
+  // Cached transcripts belong to the signed-out account — never let them leak into
+  // the next session on a shared browser.
+  void clearMessageCache()
 }
 
 function clearAuthSessionState() {

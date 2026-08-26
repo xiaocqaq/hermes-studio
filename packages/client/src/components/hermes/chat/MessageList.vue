@@ -1666,7 +1666,7 @@ defineExpose({
   min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
-  font-size: 11px;
+  font-size: 12px;
   color: $text-primary;
   padding: 3px 8px;
   border: 1px solid rgba(var(--text-primary-rgb), 0.18);

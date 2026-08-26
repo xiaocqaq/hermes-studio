@@ -251,6 +251,7 @@ const sessionCommandHandlers = new Set<(event: RunEvent) => void>()
 const sessionTitleUpdatedHandlers = new Set<(event: RunEvent) => void>()
 const sessionWorkspaceUpdatedHandlers = new Set<(event: RunEvent) => void>()
 const sessionSettingsUpdatedHandlers = new Set<(event: RunEvent) => void>()
+const sessionActivityHandlers = new Set<(event: RunEvent) => void>()
 
 /**
  * Global message.delta event handler
@@ -556,6 +557,17 @@ function globalSessionSettingsUpdatedHandler(event: RunEvent): void {
   for (const handler of sessionSettingsUpdatedHandlers) handler(event)
 }
 
+/**
+ * `session.activity` is broadcast to the profile-wide `pending-interactions:` room
+ * for every session whose run starts or settles, including sessions this socket
+ * never joined. It carries no message payload, which makes it the cheapest signal
+ * that a locally cached session went stale.
+ */
+function globalSessionActivityHandler(event: RunEvent): void {
+  if (!event.session_id) return
+  for (const handler of sessionActivityHandlers) handler(event)
+}
+
 function globalAgentEventHandler(event: RunEvent): void {
   const sid = event.session_id
   if (!sid) return
@@ -726,6 +738,13 @@ export function onSessionSettingsUpdated(handler: (event: RunEvent) => void): ()
   }
 }
 
+export function onSessionActivity(handler: (event: RunEvent) => void): () => void {
+  sessionActivityHandlers.add(handler)
+  return () => {
+    sessionActivityHandlers.delete(handler)
+  }
+}
+
 export function respondClarify(
   sessionId: string,
   clarifyId: string,
@@ -859,6 +878,7 @@ export function connectChatRun(requestedProfile?: string | null, transport: Chat
     chatRunSocket.on('session.title.updated', globalSessionTitleUpdatedHandler)
     chatRunSocket.on('session.workspace.updated', globalSessionWorkspaceUpdatedHandler)
     chatRunSocket.on('session.settings.updated', globalSessionSettingsUpdatedHandler)
+    chatRunSocket.on('session.activity', globalSessionActivityHandler)
 
     globalListenersRegistered = true
   }

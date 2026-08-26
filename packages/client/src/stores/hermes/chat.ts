@@ -1,5 +1,5 @@
-import { startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/hermes/chat'
-import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchSessions, fetchWorkspaceRunChangeFile, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/hermes/sessions'
+import { startRunViaSocket, resumeSession, registerSessionHandlers, unregisterSessionHandlers, getChatRunSocket, respondToolApproval, onPeerUserMessage, onSessionCommand, onSessionTitleUpdated, onSessionWorkspaceUpdated, onSessionSettingsUpdated, onSessionActivity, respondClarify, type ChatRunTransport, type RunEvent, type ResumeSessionPayload, type StartRunRequest, type ContentBlock as ContentBlockImport } from '@/api/hermes/chat'
+import { archiveSession as archiveSessionApi, deleteSession as deleteSessionApi, fetchSessionMessagesPage, fetchSessions, fetchWorkspaceRunChangeFile, fetchWorkspaceRunChangesForSession, setSessionModel, setSessionPushEnabled as persistSessionPushEnabled, setSessionReasoningEffort as persistSessionReasoningEffort, type HermesMessage, type SessionSummary, type WorkspaceRunChangeFileDetail, type WorkspaceRunChangeSummary } from '@/api/hermes/sessions'
 import { getActiveProfileName } from '@/api/client'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
 import { getDownloadUrl } from '@/api/hermes/download'
@@ -13,6 +13,16 @@ import { primeCompletionSound, playCompletionSound } from '@/utils/completion-so
 import { showCompletionNotification } from '@/utils/completion-notification'
 import { detectThinkingBoundary } from '@/utils/thinking-parser'
 import { isKnownBridgeSessionCommand } from '@/utils/hermes/bridge-session-commands'
+import {
+  CACHE_SCHEMA_VERSION,
+  cacheKey,
+  deleteCachedSession,
+  isMessageCacheAvailable,
+  pruneMessageCache,
+  readCachedSession,
+  writeCachedSession,
+  type CachedSessionSnapshot,
+} from '@/utils/hermes/message-cache'
 import { responseErrorMessage } from '@/utils/http-error'
 
 // Re-export ContentBlock for convenience
@@ -20,6 +30,14 @@ export type ContentBlock = ContentBlockImport
 
 export const LIVE_CHAT_MESSAGE_PAGE_SIZE = 150
 export const LIVE_CHAT_MAX_LOADED_MESSAGES = 300
+/**
+ * Extra rows fetched beyond the known delta when topping up a cached session.
+ * `mapHermesMessages` names a tool-result row from the preceding assistant row's
+ * `tool_calls`, so a little overlap keeps those pairs inside the same page.
+ */
+const MESSAGE_TAIL_SLACK = 20
+/** Streaming edits settle in bursts; coalesce snapshot writes. */
+const CACHE_PERSIST_DEBOUNCE_MS = 1500
 const LEGACY_WORKSPACE_RUN_CHANGE_MESSAGE_PREFIX = 'workspace-run-change:'
 type ChatAgentId = 'hermes' | 'claude' | 'codex' | 'pi' | 'ekko-agent'
 
@@ -1408,6 +1426,20 @@ export const useChatStore = defineStore('chat', () => {
   const pushEnabledWriteTargets = new Map<string, boolean>()
   const pushEnabledConfirmedValues = new Map<string, boolean>()
 
+  // ---- Local message cache (see utils/hermes/message-cache.ts) ----------------
+  /** Sessions a `session.activity` broadcast told us changed somewhere else. */
+  const cacheDirtySessions = new Set<string>()
+  /**
+   * Server-side message total at the moment the rendered window was last known to
+   * match the server. `Session.messageTotal` cannot be used for this: every
+   * `refreshSessionListOnly` overwrites it with the live server count, which would
+   * erase the very delta we need to detect.
+   */
+  const cacheBaselineTotals = new Map<string, number>()
+  const cachePersistTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  const isPullingMessages = ref(false)
+  void pruneMessageCache()
+
   function beginMessageLoad(sessionId: string, requestSequence: number) {
     const next = new Map(messageLoadRequests.value)
     next.set(sessionId, requestSequence)
@@ -1419,6 +1451,165 @@ export const useChatStore = defineStore('chat', () => {
     const next = new Map(messageLoadRequests.value)
     next.delete(sessionId)
     messageLoadRequests.value = next
+  }
+
+  /**
+   * Remember that the rendered window currently matches `total` server rows. Every
+   * later freshness check compares the session list's `messageCount` against this.
+   */
+  function markCacheBaseline(sessionId: string, total: number | undefined) {
+    if (!Number.isFinite(total)) return
+    cacheBaselineTotals.set(sessionId, Number(total))
+    cacheDirtySessions.delete(sessionId)
+  }
+
+  /**
+   * Snapshot the session to IndexedDB, debounced per session. Mid-stream state is
+   * never written: a half-finished assistant turn would come back as if final.
+   */
+  function persistSessionCache(sessionId: string) {
+    const pending = cachePersistTimers.get(sessionId)
+    if (pending) clearTimeout(pending)
+    cachePersistTimers.set(sessionId, setTimeout(() => {
+      cachePersistTimers.delete(sessionId)
+      const target = sessions.value.find(s => s.id === sessionId)
+      if (!target || target.isLocalOnly || !target.messages.length) return
+      if (streamStates.value.has(sessionId) || serverWorking.value.has(sessionId)) return
+      const baseline = cacheBaselineTotals.get(sessionId)
+      if (baseline == null) return
+      void writeCachedSession({
+        key: cacheKey(target.profile, sessionId),
+        schemaVersion: CACHE_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId,
+        profile: target.profile || 'default',
+        messages: target.messages,
+        loadedMessageCount: target.loadedMessageCount || target.messages.length,
+        messageTotal: baseline,
+        hasMoreBefore: Boolean(target.hasMoreBefore),
+        title: target.title,
+        inputTokens: target.inputTokens,
+        outputTokens: target.outputTokens,
+        contextTokens: target.contextTokens,
+        model: target.model,
+        provider: target.provider,
+        reasoningEffort: target.reasoningEffort,
+        workspace: target.workspace ?? null,
+        parentSessionId: target.parentSessionId ?? null,
+        forkPointMessageId: target.forkPointMessageId ?? null,
+        parentTitle: target.parentTitle ?? null,
+        parentLastMessage: target.parentLastMessage ?? null,
+        parentLastMessageRole: target.parentLastMessageRole ?? null,
+      })
+    }, CACHE_PERSIST_DEBOUNCE_MS))
+  }
+
+  /** Forget a session locally — history it describes no longer exists server-side. */
+  function invalidateSessionCache(sessionId: string) {
+    const pending = cachePersistTimers.get(sessionId)
+    if (pending) {
+      clearTimeout(pending)
+      cachePersistTimers.delete(sessionId)
+    }
+    cacheBaselineTotals.delete(sessionId)
+    cacheDirtySessions.delete(sessionId)
+    const target = sessions.value.find(s => s.id === sessionId)
+    void deleteCachedSession(target?.profile, sessionId)
+  }
+
+  function restoreSessionFromCache(target: Session, snapshot: CachedSessionSnapshot) {
+    target.messages = snapshot.messages
+    target.loadedMessageCount = snapshot.loadedMessageCount
+    target.messageTotal = Math.max(snapshot.messageTotal, target.messageCount ?? 0)
+    target.hasMoreBefore = snapshot.hasMoreBefore
+    if (!target.title && snapshot.title) target.title = snapshot.title
+    // The session list carries fresher model/provider/workspace values, so only
+    // fill gaps. `contextTokens` is the exception: it is not in the list payload at
+    // all, which makes the snapshot its only source until the next run reports one.
+    if (snapshot.contextTokens != null) target.contextTokens = snapshot.contextTokens
+    if (target.inputTokens == null) target.inputTokens = snapshot.inputTokens
+    if (target.outputTokens == null) target.outputTokens = snapshot.outputTokens
+    if (!target.model && snapshot.model) target.model = snapshot.model
+    if (!target.provider && snapshot.provider) target.provider = snapshot.provider
+    if (!target.reasoningEffort && snapshot.reasoningEffort) target.reasoningEffort = snapshot.reasoningEffort
+    if (target.workspace == null) target.workspace = snapshot.workspace ?? null
+    if (target.parentSessionId == null) target.parentSessionId = snapshot.parentSessionId ?? null
+    if (target.forkPointMessageId == null) target.forkPointMessageId = snapshot.forkPointMessageId ?? null
+    if (target.parentTitle == null) target.parentTitle = snapshot.parentTitle ?? null
+    if (target.parentLastMessage == null) target.parentLastMessage = snapshot.parentLastMessage ?? null
+    if (target.parentLastMessageRole == null) target.parentLastMessageRole = snapshot.parentLastMessageRole ?? null
+    cacheBaselineTotals.set(target.id, snapshot.messageTotal)
+    restorePersistedSubagentStreams(target.id)
+    restoreWorkspaceRunChangeMessages(target.id)
+  }
+
+  /**
+   * `'fresh'`    nothing to do (often zero bytes on the wire)
+   * `'updated'`  the newly arrived tail was fetched and merged
+   * `'fallback'` cannot be reconciled incrementally — caller should replay a resume
+   * `'error'`    the request failed
+   */
+  type TailSyncResult = 'fresh' | 'updated' | 'fallback' | 'error'
+
+  async function syncSessionTail(
+    sessionId: string,
+    options: { force?: boolean } = {},
+  ): Promise<TailSyncResult> {
+    const target = sessions.value.find(s => s.id === sessionId)
+    if (!target) return 'error'
+    const baseline = cacheBaselineTotals.get(sessionId)
+    if (baseline == null) return 'fallback'
+
+    // `messageCount` is refreshed by every session-list poll and is the same
+    // server-side COUNT(*) the paginated endpoint returns as `total`.
+    const expected = target.messageCount ?? baseline
+    if (!options.force && !cacheDirtySessions.has(sessionId) && expected === baseline) return 'fresh'
+    // Fewer rows than we hold means history was rewritten (compression, fork trim).
+    // A tail page cannot express that, so replay the whole window instead.
+    if (expected < baseline) return 'fallback'
+
+    const delta = Math.max(0, expected - baseline)
+    // Past this point a tail page costs as much as a resume, so just resume.
+    if (delta > LIVE_CHAT_MESSAGE_PAGE_SIZE - MESSAGE_TAIL_SLACK) return 'fallback'
+    const limit = Math.min(LIVE_CHAT_MESSAGE_PAGE_SIZE, delta + MESSAGE_TAIL_SLACK)
+
+    try {
+      // The server pages with `ORDER BY id DESC LIMIT ? OFFSET ?` and reverses the
+      // rows, so offset 0 is the newest slice — exactly the tail we are missing.
+      const page = await fetchSessionMessagesPage(sessionId, 0, limit, target.profile)
+      if (!page) return 'error'
+      if (page.total < baseline) return 'fallback'
+
+      const mapped = mapHermesMessages(page.messages || [])
+      if (!mapped.length) {
+        markCacheBaseline(sessionId, page.total)
+        return 'fresh'
+      }
+
+      // Replace the fetched window wholesale instead of appending: rows this tab
+      // rendered live carry client-generated ids, so id-only dedupe would double
+      // them. Inside the window the server page is authoritative — the same
+      // assumption the `resume` path makes about the entire array.
+      const mappedIds = new Set(mapped.map(message => message.id))
+      const windowStart = mapped[0].timestamp
+      const kept = target.messages.filter(
+        message => message.timestamp < windowStart && !mappedIds.has(message.id),
+      )
+      const added = page.total - baseline
+      target.messages = [...kept, ...mapped]
+      target.loadedMessageCount = Math.min(page.total, (target.loadedMessageCount || 0) + added)
+      target.messageTotal = page.total
+      target.messageCount = page.total
+      target.hasMoreBefore = (target.loadedMessageCount || 0) < page.total
+      restorePersistedSubagentStreams(sessionId)
+      attachWorkspaceChangesToMessages(sessionId)
+      markCacheBaseline(sessionId, page.total)
+      persistSessionCache(sessionId)
+      return added > 0 ? 'updated' : 'fresh'
+    } catch (err) {
+      console.error('Failed to sync session message tail:', err)
+      return 'error'
+    }
   }
 
   async function fetchRuntimeSessions(profile?: string | null): Promise<SessionSummary[]> {
@@ -1500,6 +1691,7 @@ export const useChatStore = defineStore('chat', () => {
   const activeSession = ref<Session | null>(null)
   const messages = computed<Message[]>(() => activeSession.value?.messages || [])
   const workspaceRunChangesBySession = ref<Map<string, Map<string, WorkspaceRunChangeSummary>>>(new Map())
+  const workspaceRunChangeLoadRequests = new Set<string>()
 
   function isSessionLive(sessionId: string): boolean {
     return streamStates.value.has(sessionId) || serverWorking.value.has(sessionId)
@@ -1628,6 +1820,22 @@ export const useChatStore = defineStore('chat', () => {
     const target = sessions.value.find(session => session.id === sessionId)
     if (target) alignWorkspaceChangeAssistantMessage(target.messages, change, assistantMessageId)
     upsertWorkspaceRunChange(sessionId, change)
+  }
+
+  function restoreWorkspaceRunChangeMessages(sessionId: string) {
+    attachWorkspaceChangesToMessages(sessionId)
+    if (workspaceRunChangesBySession.value.has(sessionId) || workspaceRunChangeLoadRequests.has(sessionId)) return
+    workspaceRunChangeLoadRequests.add(sessionId)
+    void loadWorkspaceRunChangesForSession(sessionId)
+      .catch(err => console.warn('Failed to load workspace run changes:', err))
+      .finally(() => {
+        workspaceRunChangeLoadRequests.delete(sessionId)
+      })
+  }
+
+  async function loadWorkspaceRunChangesForSession(sessionId: string) {
+    const changes = await fetchWorkspaceRunChangesForSession(sessionId)
+    setWorkspaceRunChanges(sessionId, changes)
   }
 
   async function loadWorkspaceRunChangeFile(sessionId: string, toolCallId: string, fileId: number): Promise<WorkspaceRunChangeFileDetail | null> {
@@ -1917,7 +2125,42 @@ export const useChatStore = defineStore('chat', () => {
     return session
   }
 
-  async function switchSession(sessionId: string, focusId?: string | null) {
+  /**
+   * Render a session straight from the local snapshot and top up only its tail.
+   * Returns true when that succeeded, so the caller can skip the `resume` round
+   * trip entirely; false means fall through to the full server replay.
+   */
+  async function restoreSwitchFromCache(sessionId: string, requestSequence: number): Promise<boolean> {
+    const stillCurrent = () =>
+      activeSessionId.value === sessionId && requestSequence === switchSessionRequestSequence
+    const initial = sessions.value.find(s => s.id === sessionId)
+    if (!initial || initial.isLocalOnly) return false
+
+    const snapshot = await readCachedSession(initial.profile, sessionId)
+    if (!snapshot?.messages?.length || !stillCurrent()) return false
+    // The session may have started running while we were reading IndexedDB, in
+    // which case only a resume can hand us the live run state.
+    if (serverWorking.value.has(sessionId) || streamStates.value.has(sessionId)) return false
+    const target = sessions.value.find(s => s.id === sessionId)
+    if (!target) return false
+
+    restoreSessionFromCache(target, snapshot)
+    activeSession.value = target
+
+    const status = await syncSessionTail(sessionId)
+    // A rewritten or unreachable history cannot be patched incrementally; the
+    // snapshot we just rendered gets replaced by the resume the caller falls into.
+    if (status === 'fallback' || status === 'error') return false
+    if (stillCurrent()) await loadWorkspaceRunChangesForSession(sessionId)
+    persistSessionCache(sessionId)
+    return true
+  }
+
+  async function switchSession(
+    sessionId: string,
+    focusId?: string | null,
+    options: { skipCache?: boolean } = {},
+  ) {
     activeSelectionSequence++
     const requestSequence = ++switchSessionRequestSequence
     clearThinkingObservationFor(sessionId)
@@ -1933,6 +2176,31 @@ export const useChatStore = defineStore('chat', () => {
 
     beginMessageLoad(sessionId, requestSequence)
     let backgroundPendingOnResume = 0
+
+    // Fast path: an idle session with a valid local snapshot renders with no
+    // `resume` at all — the server page is up to 150 messages, the tail top-up is
+    // usually zero bytes.
+    if (
+      !options.skipCache
+      // Sync guard first: with no IndexedDB this path must not even cost an await,
+      // or every `resume` would slip a microtask later than callers expect.
+      && isMessageCacheAvailable()
+      && !serverWorking.value.has(sessionId)
+      && !streamStates.value.has(sessionId)
+    ) {
+      try {
+        if (await restoreSwitchFromCache(sessionId, requestSequence)) {
+          endMessageLoad(sessionId, requestSequence)
+          return
+        }
+      } catch (err) {
+        console.error('Failed to restore session from local cache:', err)
+      }
+      if (activeSessionId.value !== sessionId || requestSequence !== switchSessionRequestSequence) {
+        endMessageLoad(sessionId, requestSequence)
+        return
+      }
+    }
 
     try {
       // Load messages via Socket.IO resume (server loads from DB if not in memory)
@@ -2088,6 +2356,13 @@ export const useChatStore = defineStore('chat', () => {
           resolve()
         }, activeSession.value?.profile, runtimeTransport())
       })
+      if (activeSessionId.value === sessionId && requestSequence === switchSessionRequestSequence) {
+        const resumed = sessions.value.find(s => s.id === sessionId)
+        if (resumed?.messages.length) {
+          markCacheBaseline(sessionId, resumed.messageTotal ?? resumed.messageCount)
+          persistSessionCache(sessionId)
+        }
+      }
     } catch (err) {
       console.error('Failed to load session messages via resume:', err)
     } finally {
@@ -2124,12 +2399,50 @@ export const useChatStore = defineStore('chat', () => {
       target.messageTotal = page.total
       target.messageCount = page.total
       target.hasMoreBefore = page.hasMore
+      // Keep the cache baseline untouched: this page is an older window, so a
+      // newer tail may still be missing even though `page.total` counts it.
+      persistSessionCache(sessionId)
       return olderMessages.length > 0
     } catch (err) {
       console.error('Failed to load older session messages:', err)
       return false
     } finally {
       target.isLoadingOlderMessages = false
+    }
+  }
+
+  /**
+   * Manual "pull latest replies" action behind the chat header button. Always hits
+   * the server (unlike the automatic paths, which trust the freshness probe) but
+   * still asks only for the tail, falling back to a full replay when the tail
+   * cannot be reconciled.
+   */
+  async function pullLatestMessages(): Promise<'fresh' | 'updated' | 'error'> {
+    const sessionId = activeSessionId.value
+    if (!sessionId || isPullingMessages.value) return 'error'
+    const target = sessions.value.find(s => s.id === sessionId)
+    if (!target || target.isLocalOnly) return 'error'
+    isPullingMessages.value = true
+    try {
+      // Refresh the count probe first so the tail request asks for the right slice.
+      await refreshSessionListOnly(sessionProfileFilter.value)
+      if (activeSessionId.value !== sessionId) return 'error'
+      const status = await syncSessionTail(sessionId, { force: true })
+      if (status === 'fresh' || status === 'updated') {
+        // If a run is live we may be outside `session:<id>` (the cache path never
+        // joined it), so re-attach for the rest of the run.
+        if (serverWorking.value.has(sessionId)) resumeSessionSnapshot(sessionId)
+        return status
+      }
+      const before = target.messages.length
+      await switchSession(sessionId, null, { skipCache: true })
+      const after = sessions.value.find(s => s.id === sessionId)?.messages.length ?? 0
+      return after !== before ? 'updated' : 'fresh'
+    } catch (err) {
+      console.error('Failed to pull latest messages:', err)
+      return 'error'
+    } finally {
+      isPullingMessages.value = false
     }
   }
 
@@ -2215,6 +2528,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = sessions.value.filter(s => s.id !== sessionId)
     clearMessageReference(sessionId)
     setAbortState(sessionId, null)
+    invalidateSessionCache(sessionId)
     if (activeSessionId.value === sessionId) {
       if (sessions.value.length > 0) {
         await switchSession(sessions.value[0].id)
@@ -2233,6 +2547,7 @@ export const useChatStore = defineStore('chat', () => {
     sessions.value = sessions.value.filter(s => s.id !== sessionId)
     clearMessageReference(sessionId)
     setAbortState(sessionId, null)
+    invalidateSessionCache(sessionId)
     if (completedUnreadSessions.value.has(sessionId)) {
       const next = new Set(completedUnreadSessions.value)
       next.delete(sessionId)
@@ -4507,6 +4822,9 @@ export const useChatStore = defineStore('chat', () => {
             const target = sessions.value.find(s => s.id === sid)
             if (target) target.contextTokens = (evt as any).contextTokens
           }
+          // Compression rewrites stored history, so any snapshot of it is wrong —
+          // drop it rather than trying to patch a tail onto stale rows.
+          invalidateSessionCache(sid)
           setTimeout(() => {
             const state = compressionStates.value.get(sid)
             if (state && !state.compressing) {
@@ -5067,6 +5385,26 @@ export const useChatStore = defineStore('chat', () => {
   onSessionWorkspaceUpdated(applySessionWorkspaceUpdate)
   onSessionSettingsUpdated(applySessionSettingsUpdate)
 
+  /**
+   * `session.activity` is the cheap cache-invalidation signal: it carries no
+   * messages, only "this session's run started / settled".
+   */
+  onSessionActivity((event) => {
+    const sid = event.session_id
+    if (!sid) return
+    // A run we are streaming ourselves needs no invalidation — we already hold
+    // every row it produces.
+    const isLocallyLive = streamStates.value.has(sid) || serverWorking.value.has(sid)
+    if (isLocallyLive) return
+    cacheDirtySessions.add(sid)
+    // A run just started somewhere else (CLI / Telegram / another tab). When the
+    // cache fast path skipped `resume` we never joined `session:<id>`, so without
+    // this the transcript would sit frozen for the whole run.
+    if (event.status === 'running' && activeSessionId.value === sid) {
+      resumeSessionSnapshot(sid)
+    }
+  })
+
   function stopStreaming() {
     const sid = activeSessionId.value
     if (!sid) return
@@ -5094,49 +5432,73 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /**
+   * Full `resume` replay of one session: the only way to learn live run state
+   * (queue, pending approvals, abort flag) plus the whole message page. Used when
+   * the incremental tail sync cannot answer — see `syncSessionTail`.
+   */
+  const inFlightVisibleResumes = new Set<string>()
+  function resumeSessionSnapshot(sid: string) {
+    if (inFlightVisibleResumes.has(sid)) return
+    inFlightVisibleResumes.add(sid)
+    // The server may never answer (dropped socket); don't wedge the guard.
+    const guardTimer = setTimeout(() => inFlightVisibleResumes.delete(sid), 20_000)
+    resumeSession(sid, (data) => {
+      clearTimeout(guardTimer)
+      inFlightVisibleResumes.delete(sid)
+      applyResumedRunStartedAt(sid, data as any)
+      if (data.isWorking) {
+        serverWorking.value.add(sid)
+      } else {
+        serverWorking.value.delete(sid)
+      }
+      if (data.isAborting) {
+        setAbortState(sid, { aborting: true, synced: null })
+      } else if (!data.isWorking) {
+        setAbortState(sid, null)
+      }
+      if (!data.isWorking) setCompressionState(sid, null)
+      applyResumedSessionSettings(data)
+      const target = sessions.value.find(s => s.id === sid)
+      if (data.messages?.length && target) {
+        if (typeof data.workspace === 'string') {
+          target.workspace = data.workspace.trim() || null
+          target.isLocalOnly = false
+        }
+        target.messages = mapHermesMessages(data.messages as any[])
+        restorePersistedSubagentStreams(sid)
+        target.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
+        target.messageTotal = data.messageTotal ?? target.messageCount ?? target.loadedMessageCount
+        target.messageCount = target.messageTotal
+        target.hasMoreBefore = data.hasMoreBefore ?? target.loadedMessageCount < target.messageTotal
+        restoreWorkspaceRunChangeMessages(sid)
+        markCacheBaseline(sid, target.messageTotal)
+        persistSessionCache(sid)
+      }
+      resumeServerWorkingRun(sid)
+    }, sessions.value.find(s => s.id === sid)?.profile, runtimeTransport())
+  }
+
   // Tab visibility: re-sync when returning to foreground
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && !isStreaming.value) {
+      if (document.visibilityState !== 'visible' || isStreaming.value) return
+      void (async () => {
         // Live-sync the session list so sessions created elsewhere (CLI,
-        // Telegram, another device) appear without a manual reload.
-        void refreshSessionListOnly()
-      }
-      if (document.visibilityState === 'visible' && activeSessionId.value && !isStreaming.value) {
+        // Telegram, another device) appear without a manual reload. Awaited
+        // because its `message_count` is the freshness probe the tail sync reads.
+        await refreshSessionListOnly()
         const sid = activeSessionId.value
-        if (sid && !streamStates.value.has(sid)) {
-          // Re-load messages via resume (server loads from DB)
-          resumeSession(sid, (data) => {
-            if (data.isWorking) {
-              serverWorking.value.add(sid)
-            } else {
-              serverWorking.value.delete(sid)
-            }
-            applyResumedRunStartedAt(sid, data as any)
-            if (data.isAborting) {
-              setAbortState(sid, { aborting: true, synced: null })
-            } else if (!data.isWorking) {
-              setAbortState(sid, null)
-            }
-            if (!data.isWorking) setCompressionState(sid, null)
-            applyResumedSessionSettings(data)
-            if (data.messages?.length && activeSession.value) {
-              if (typeof data.workspace === 'string') {
-                activeSession.value.workspace = data.workspace.trim() || null
-                activeSession.value.isLocalOnly = false
-              }
-              activeSession.value.messages = mapHermesMessages(data.messages as any[])
-              restorePersistedSubagentStreams(sid)
-              setWorkspaceRunChanges(sid, data.workspaceRunChanges || [])
-              activeSession.value.loadedMessageCount = data.messageLoadedCount ?? data.messages.length
-              activeSession.value.messageTotal = data.messageTotal ?? activeSession.value.messageCount ?? activeSession.value.loadedMessageCount
-              activeSession.value.messageCount = activeSession.value.messageTotal
-              activeSession.value.hasMoreBefore = data.hasMoreBefore ?? activeSession.value.loadedMessageCount < activeSession.value.messageTotal
-            }
-            resumeServerWorkingRun(sid)
-          }, activeSession.value?.profile, runtimeTransport())
+        if (!sid || streamStates.value.has(sid) || isStreaming.value) return
+        // An idle session usually needs nothing at all here; only fall back to the
+        // 150-message replay when the tail cannot be reconciled, or when a run is
+        // in flight and we need its live state.
+        if (!serverWorking.value.has(sid)) {
+          const status = await syncSessionTail(sid)
+          if (status === 'fresh' || status === 'updated') return
         }
-      }
+        resumeSessionSnapshot(sid)
+      })()
     })
   }
 
@@ -5339,6 +5701,8 @@ export const useChatStore = defineStore('chat', () => {
     switchSession,
     ensureSessionLoaded,
     loadOlderMessages,
+    pullLatestMessages,
+    isPullingMessages,
     switchSessionModel,
     addOrUpdateSession,
     clearProviderFromSessions,
