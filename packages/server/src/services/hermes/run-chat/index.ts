@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto'
 import { logger } from '../../logger'
 import { getSystemPrompt } from '../../../lib/llm-prompt'
 import { clearSessionMessages, deleteSession, getSession, getSessionMetadata, listSessions, updateMessageDisplayContent } from '../../../db/hermes/session-store'
+import { listWorkspaceRunChangesForAssistantMessages } from '../../../db/hermes/workspace-run-changes-store'
 import { getSessionCategory } from '../../../db/hermes/session-category-store'
 import { getActiveProfileName, getProfileDir, listProfileNamesFromDisk } from '../hermes-profile'
 import {
@@ -33,8 +34,14 @@ import {
   parseCodingAgentSessionCommand,
 } from '../../coding-agents/session-command'
 import { contentBlocksToString } from './content-blocks'
-import { buildOutboundRunEvent, buildResumeEvents, buildResumeMessages } from './resume-payload'
+import {
+  buildAppResumeMessagePage,
+  buildOutboundRunEvent,
+  buildResumeEvents,
+  buildResumeMessagePage,
+} from './resume-payload'
 import type {
+  BackgroundContinuationContext,
   ChatCodingAgentId,
   ContentBlock,
   QueueInsertionControl,
@@ -229,6 +236,20 @@ export class ChatRunSocket {
     this.nsp = io.of('/chat-run')
   }
 
+  emitSessionSettingsUpdated(sessionId: string, settings: {
+    model?: string
+    provider?: string
+    api_mode?: string
+    reasoning_effort?: string
+    push_enabled?: boolean
+  }): void {
+    this.nsp.to(`session:${sessionId}`).emit('session.settings.updated', {
+      event: 'session.settings.updated',
+      session_id: sessionId,
+      ...settings,
+    })
+  }
+
   init() {
     this.closing = false
     this.nsp.use(this.authMiddleware.bind(this))
@@ -356,6 +377,7 @@ export class ChatRunSocket {
       allow_command_passthrough?: boolean
       // Local patch (reasoning-effort): per-session reasoning effort override.
       reasoning_effort?: string
+      push_enabled?: boolean
     }) => {
       let runProfile: string
       try {
@@ -474,6 +496,7 @@ export class ChatRunSocket {
         }
         state.events = []
         state.isWorking = !isCodingAgentExecution(source, data)
+        state.runStartedAt = Date.now()
         state.profile = runProfile
         state.source = source
       }
@@ -566,6 +589,23 @@ export class ChatRunSocket {
       }
       socket.join(`session:${sid}`)
       await this.resumeSession(socket, sid)
+    })
+
+    socket.on('app.resume', async (data: { session_id?: string; id?: string }) => {
+      if (!data.session_id || typeof data.id !== 'string' || data.id.length > 128) return
+      const sid = data.session_id
+      try {
+        requireSocketSessionAccess(sid)
+      } catch (err) {
+        socket.emit('run.failed', {
+          event: 'run.failed',
+          session_id: sid,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return
+      }
+      socket.join(`session:${sid}`)
+      await this.resumeSession(socket, sid, { event: 'app.resumed', cachedId: data.id })
     })
 
     socket.on('abort', (data: { session_id?: string }) => {
@@ -776,6 +816,7 @@ export class ChatRunSocket {
       one_shot_model?: boolean
       allow_command_passthrough?: boolean
       reasoning_effort?: string
+      push_enabled?: boolean
       background_delegation_enabled?: boolean
       context_compression_enabled?: boolean
       background_delegation_id?: string
@@ -785,6 +826,7 @@ export class ChatRunSocket {
     },
     profile: string,
     skipUserMessage = false,
+    backgroundContinuationContext?: BackgroundContinuationContext,
   ) {
     const source = resolveRunSource(data.source, data.session_id)
     if (data.session_id) {
@@ -885,6 +927,7 @@ export class ChatRunSocket {
         skipUserMessage,
         loadSessionStateFromDb,
         this.dequeueNextQueuedRun.bind(this),
+        backgroundContinuationContext,
       )
       return
     }
@@ -914,6 +957,7 @@ export class ChatRunSocket {
         this.sessionMap,
         this.dequeueNextQueuedRun.bind(this),
         skipUserMessage,
+        backgroundContinuationContext,
       )
       return
     }
@@ -1203,7 +1247,11 @@ export class ChatRunSocket {
 
   // --- Resume ---
 
-  private async resumeSession(socket: Socket, sid: string) {
+  private async resumeSession(
+    socket: Socket,
+    sid: string,
+    options?: { event: 'app.resumed'; cachedId: string },
+  ) {
     let state = this.sessionMap.get(sid)
     if (!state) {
       state = await loadSessionStateFromDb(sid, this.sessionMap)
@@ -1214,20 +1262,38 @@ export class ChatRunSocket {
       ? state.events
       : (state.events || []).filter(evt => evt?.event === 'run.reattach_failed')
     const sessionDetail = getSessionMetadata(sid)
-    socket.emit('resumed', {
-      session_id: sid,
-      messages: buildResumeMessages(state.messages),
+    const messagePage = buildResumeMessagePage(state.messages, {
+      limit: state.messagePageLimit,
       messageTotal: state.messageTotal,
-      messageLoadedCount: state.messageLoadedCount,
-      messagePageLimit: state.messagePageLimit,
-      hasMoreBefore: state.hasMoreBefore,
+      messageStateBaselineCount: state.messageStateBaselineCount,
+    })
+    const workspaceRunChanges = listWorkspaceRunChangesForAssistantMessages(
+      sid,
+      messagePage.messages
+        .filter(message => String(message.display_role || message.role || '') === 'assistant')
+        .map(message => message.id),
+    )
+    const resumePage = { ...messagePage, workspaceRunChanges }
+    const appMessagePage = options
+      ? buildAppResumeMessagePage(resumePage, options.cachedId)
+      : null
+    const outboundMessagePage = appMessagePage || resumePage
+    socket.emit(options?.event || 'resumed', {
+      session_id: sid,
+      ...outboundMessagePage,
       parentSessionId: sessionDetail?.parent_session_id || null,
       forkPointMessageId: sessionDetail?.fork_point_message_id || null,
       parentTitle: sessionDetail?.parent_title || null,
       parentLastMessage: sessionDetail?.parent_last_message || null,
       parentLastMessageRole: sessionDetail?.parent_last_message_role || null,
       workspace: sessionDetail?.workspace || null,
+      model: sessionDetail?.model || '',
+      provider: sessionDetail?.provider || '',
+      api_mode: sessionDetail?.api_mode || '',
+      reasoning_effort: sessionDetail?.reasoning_effort || '',
+      push_enabled: Number(sessionDetail?.push_enabled || 0) !== 0,
       isWorking: state.isWorking,
+      runStartedAt: state.runStartedAt,
       isAborting: state.isAborting || false,
       events: buildResumeEvents(resumeEvents),
       inputTokens: state.inputTokens,
@@ -1248,8 +1314,9 @@ export class ChatRunSocket {
       backgroundPending: this.backgroundPendingCount(state),
     })
 
-    logger.info('[chat-run-socket] socket %s resumed session %s (working: %s, messages: %d)',
-      socket.id, sid, state.isWorking, state.messages.length)
+    logger.info('[chat-run-socket] socket %s resumed session %s (working: %s, messages: %d, app cache: %s)',
+      socket.id, sid, state.isWorking, state.messages.length,
+      appMessagePage ? (appMessagePage.messagesCached ? 'hit' : 'miss') : 'n/a')
   }
 
   private async reattachBridgeRun(socket: Socket, sid: string, state: SessionState) {
@@ -1267,6 +1334,12 @@ export class ChatRunSocket {
       pollKey = `${sid}:${runId}`
       if (this.bridgeResumePolls.has(pollKey)) return
       this.bridgeResumePolls.add(pollKey)
+      if (!state.isWorking || !(state.runStartedAt && state.runStartedAt > 0)) {
+        // The bridge does not expose the original start in its lightweight
+        // status response. Use one shared server-side fallback for every
+        // client attaching after this Web UI process discovers the run.
+        state.runStartedAt = Date.now()
+      }
       state.isWorking = true
       state.isAborting = state.isAborting === true
       state.runId = runId
@@ -1357,6 +1430,7 @@ export class ChatRunSocket {
     const activeAgent = state.webhookAgent
       || (storedAgent === 'ekko-agent' ? 'ekko' : storedAgent === 'claude' ? 'claude-code' : storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : 'bridge')
     if (activeAgent === 'ekko') return 'ekko'
+    if (activeAgent === 'claude-code' || activeAgent === 'codex' || activeAgent === 'pi') return activeAgent
     if (activeAgent !== 'bridge') return null
     if (state.source === 'coding_agent') return null
     return state.source === 'cli' || state.source === 'global_agent' ? 'hermes' : null
@@ -1424,7 +1498,7 @@ export class ChatRunSocket {
       runId: state.runId,
       runtime,
       phase: 'requesting',
-      guarantee: 'strict',
+      guarantee: runtime === 'hermes' || runtime === 'ekko' ? 'strict' : 'immediate',
       requestedAt: Date.now(),
     }
     state.queueInsertion = control
@@ -1442,6 +1516,19 @@ export class ChatRunSocket {
     if (!state || !control || control.generation !== generation || control.phase !== 'requesting' || !control.runId) return
 
     try {
+      if (control.runtime === 'claude-code' || control.runtime === 'codex' || control.runtime === 'pi') {
+        control.phase = 'stopping_current_turn'
+        this.emitQueueInsertionUpdate(sessionId, control)
+        const result = await codingAgentRunManager.interruptForQueueInsertion(sessionId, control.runId)
+        if (result.status !== 'interrupted') {
+          const currentState = this.sessionMap.get(sessionId)
+          if (currentState?.queueInsertion?.generation === generation) {
+            this.clearQueueInsertion(sessionId, currentState, result.status)
+          }
+        }
+        return
+      }
+
       const result = control.runtime === 'ekko'
         ? getGlobalEkkoAgent(state.profile || 'default').requestBoundaryInterrupt({
             sessionId,
@@ -1499,7 +1586,8 @@ export class ChatRunSocket {
     if (control.phase !== 'requesting') {
       payload.interrupted = true
       payload.stop_reason = 'queue_insertion'
-      payload.boundary_guarantee = control.guarantee
+      if (control.guarantee === 'strict') payload.boundary_guarantee = 'strict'
+      else payload.interruption_mode = 'immediate'
     }
     if (state.queue.length === 0) this.clearQueueInsertion(sessionId, state, 'queue_empty')
   }
@@ -1533,7 +1621,16 @@ export class ChatRunSocket {
   }
 
   private runQueuedItem(socket: Socket, sessionId: string, next: QueuedRun, fallbackProfile = 'default') {
+    const state = this.sessionMap.get(sessionId)
+    if (state) state.runStartedAt = Date.now()
     const skipUserMessage = next.displayInput === null
+    const backgroundContinuationContext = next.backgroundContinuationContext
+      || (next.backgroundDelegationId
+        ? this.sessionMap.get(sessionId)?.backgroundContinuationContexts?.[next.backgroundDelegationId]
+        : undefined)
+    const runProfile = backgroundContinuationContext?.runtime === 'hermes'
+      ? backgroundContinuationContext.profile
+      : next.profile || fallbackProfile
     void this.handleRun(socket, {
       input: next.input,
       display_input: next.displayInput,
@@ -1571,7 +1668,7 @@ export class ChatRunSocket {
       background_delegation_id: next.backgroundDelegationId,
       background_claim_id: next.backgroundClaimId,
       autonomous: next.autonomous,
-    }, next.profile || fallbackProfile, skipUserMessage)
+    }, runProfile, skipUserMessage, backgroundContinuationContext)
   }
 
   // --- Helpers ---
@@ -1629,6 +1726,7 @@ export class ChatRunSocket {
     const state = getOrCreateSession(this.sessionMap, sessionId)
     state.events = []
     state.isWorking = !isCodingAgentExecution(source, data)
+    state.runStartedAt = Date.now()
     state.profile = profile
     state.source = source
 
@@ -1879,6 +1977,7 @@ export class ChatRunSocket {
       state.messages = []
       state.messageTotal = 0
       state.messageLoadedCount = 0
+      state.messageStateBaselineCount = 0
       state.hasMoreBefore = false
       state.inputTokens = 0
       state.outputTokens = 0

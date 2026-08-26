@@ -1,11 +1,31 @@
 import type { ChatMessage } from '../../../lib/context-compressor'
+import type { EkkoBackgroundContinuationContext } from '../../../../../ekko-agent/src'
+
+export interface HermesBackgroundContinuationContext {
+  runtime: 'hermes'
+  version: 1
+  delegationId: string
+  sessionId: string
+  originRunId: string
+  messages: ChatMessage[]
+  model?: string
+  provider?: string
+  profile: string
+  instructions?: string
+  workspace?: string | null
+  reasoningEffort?: string
+}
+
+export type BackgroundContinuationContext =
+  | ({ runtime: 'ekko' } & EkkoBackgroundContinuationContext)
+  | HermesBackgroundContinuationContext
 
 /**
  * Content block types for Anthropic-compatible message format
  */
 export type ContentBlock =
   | { type: 'text'; text: string }
-  | { type: 'image'; name: string; path: string; media_type: string; context?: string }
+  | { type: 'image'; name: string; path: string; media_type: string; context?: string; video_frame?: boolean }
   | { type: 'file'; name: string; path: string; media_type?: string; context?: string }
 
 export interface SessionMessage {
@@ -16,6 +36,7 @@ export interface SessionMessage {
   display_role?: string | null
   display_content?: string | null
   runMarker?: string
+  run_marker?: string | null
   tool_call_id?: string | null
   tool_calls?: any[] | null
   tool_name?: string | null
@@ -64,6 +85,8 @@ export interface QueuedRun {
   reasoningEffort?: string
   backgroundDelegationId?: string
   backgroundClaimId?: string
+  /** Internal-only origin history for a background callback. Never accepted from socket input. */
+  backgroundContinuationContext?: BackgroundContinuationContext
   autonomous?: boolean
 }
 
@@ -77,7 +100,8 @@ export interface BackgroundDelegationState {
   dispatchPayload?: Record<string, unknown>
 }
 
-export type QueueInsertionRuntime = 'hermes' | 'ekko'
+export type QueueInsertionRuntime = 'hermes' | 'ekko' | 'claude-code' | 'codex' | 'pi'
+export type QueueInsertionGuarantee = 'strict' | 'immediate'
 export type QueueInsertionPhase =
   | 'requesting'
   | 'waiting_for_tool_batch'
@@ -90,7 +114,7 @@ export interface QueueInsertionControl {
   runId?: string
   runtime: QueueInsertionRuntime
   phase: QueueInsertionPhase
-  guarantee: 'strict'
+  guarantee: QueueInsertionGuarantee
   requestedAt: number
 }
 
@@ -99,8 +123,15 @@ export interface SessionState {
   messageTotal?: number
   messageLoadedCount?: number
   messagePageLimit?: number
+  messageStateBaselineCount?: number
   hasMoreBefore?: boolean
   isWorking: boolean
+  /**
+   * When the current run began, so a client that joins late shows how long
+   * the agent has really been working rather than counting from its own
+   * first render.
+   */
+  runStartedAt?: number
   events: Array<{ event: string; data: any }>
   abortController?: AbortController
   runId?: string
@@ -134,6 +165,8 @@ export interface SessionState {
   bridgeCompressionResults?: Record<string, BridgeCompressionResult>
   backgroundTasks?: Record<string, Record<string, unknown>>
   backgroundDelegations?: Record<string, BackgroundDelegationState>
+  /** Process-local by design; callbacks after a Studio restart are rejected instead of using live history. */
+  backgroundContinuationContexts?: Record<string, BackgroundContinuationContext>
 }
 
 export interface ResponseRunState {

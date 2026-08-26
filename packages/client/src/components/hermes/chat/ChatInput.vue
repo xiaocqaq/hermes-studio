@@ -6,6 +6,7 @@ import { useProfilesStore } from '@/stores/hermes/profiles'
 import { useSettingsStore } from '@/stores/hermes/settings'
 import { fetchContextLength } from '@/api/hermes/sessions'
 import { setModelContext } from '@/api/hermes/model-context'
+import { fetchSocialMessagePlatforms } from '@/api/social-messages'
 import { fetchSkills, type SkillCategory, type SkillInfo } from '@/api/hermes/skills'
 import { deleteSkillBundleApi, fetchSkillBundles, type SkillBundleInfo } from '@/api/hermes/skill-bundles'
 import { NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
@@ -18,6 +19,7 @@ import BundleCreateModal from './BundleCreateModal.vue'
 import { BRIDGE_SESSION_COMMAND_DEFINITIONS } from '@/utils/hermes/bridge-session-commands'
 import { clampChatInputHeight, isMobileChatInputViewport } from '@/utils/chat-input-height'
 import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/composables/useComposerVoiceInput'
+import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 
 const chatStore = useChatStore()
 const appStore = useAppStore()
@@ -30,8 +32,10 @@ const { toolTraceVisible, toggleToolTraceVisible } = useToolTraceVisibility()
 
 const props = withDefaults(defineProps<{
   modelLabel?: string
+  modelDisabled?: boolean
 }>(), {
   modelLabel: '',
+  modelDisabled: false,
 })
 
 const emit = defineEmits<{
@@ -71,6 +75,9 @@ const reasoningEffortAccentStyle = computed(() => ({
     || reasoningEffortAccentColors[0],
 }))
 const isMoaSession = computed(() => chatStore.activeSession?.provider === 'moa')
+const isGlobalCodingAgentSession = computed(() =>
+  chatStore.activeSession?.codingAgentMode === 'global'
+)
 const reasoningEffortLabel = computed<string>(() => {
   const v = currentReasoningEffort.value
   if (!v) return t('chat.reasoningEffort.defaultLabel')
@@ -92,6 +99,7 @@ function onReasoningEffortSliderChange(value: number | [number, number]) {
 }
 
 function handleModelButtonClick() {
+  if (props.modelDisabled) return
   emit('modelClick')
 }
 
@@ -108,6 +116,9 @@ const textareaRef = ref<HTMLTextAreaElement>()
 const commandDropdownRef = ref<HTMLDivElement>()
 const fileInputRef = ref<HTMLInputElement>()
 const attachments = ref<Attachment[]>([])
+const pendingVideoFrameJobs = new Set<Promise<void>>()
+const isPreparingAttachments = ref(false)
+let sendAwaitingAttachments = false
 const isDragging = ref(false)
 const dragCounter = ref(0)
 const isComposing = ref(false)
@@ -453,6 +464,15 @@ const inputSettingsOptions = computed<DropdownOption[]>(() => [
       'aria-hidden': 'true',
     }, toolTraceVisible.value ? '✓' : ''),
   },
+  {
+    label: t('chat.pushEnabled'),
+    key: 'pushEnabled',
+    disabled: !chatStore.activeSessionId,
+    icon: () => h('span', {
+      class: ['settings-check', { active: Boolean(chatStore.activeSession?.pushEnabled) }],
+      'aria-hidden': 'true',
+    }, chatStore.activeSession?.pushEnabled ? '✓' : ''),
+  },
 ])
 
 function readDraftMap(): DraftMap {
@@ -499,7 +519,7 @@ onMounted(() => {
   })
 })
 
-function handleInputSettingsSelect(key: string | number) {
+async function handleInputSettingsSelect(key: string | number) {
   if (key === 'voiceMode') {
     if (chatStore.activeSessionId) emit('voiceClick')
     return
@@ -507,6 +527,29 @@ function handleInputSettingsSelect(key: string | number) {
 
   if (key === 'toolTrace') {
     toggleToolTraceVisible()
+    return
+  }
+
+  if (key === 'pushEnabled') {
+    const sessionId = chatStore.activeSessionId
+    if (!sessionId) return
+    const nextEnabled = !Boolean(chatStore.activeSession?.pushEnabled)
+    if (nextEnabled) {
+      try {
+        const platforms = await fetchSocialMessagePlatforms()
+        const pushReady = platforms.some(platform => (
+          platform.active && platform.configured && platform.pushReady
+        ))
+        if (!pushReady) {
+          message.warning(t('chat.pushNotConfigured'))
+          return
+        }
+      } catch {
+        message.warning(t('chat.pushNotConfigured'))
+        return
+      }
+    }
+    await chatStore.setSessionPushEnabled(sessionId, nextEnabled)
   }
 }
 
@@ -813,7 +856,7 @@ function formatTokens(n: number): string {
 
 // --- File attachment helpers ---
 
-function addFile(file: File, context?: string) {
+function addFile(file: File) {
   if (attachments.value.find(a => a.name === file.name)) return
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
   const url = URL.createObjectURL(file)
@@ -824,18 +867,39 @@ function addFile(file: File, context?: string) {
     size: file.size,
     url,
     file,
-    ...(context?.trim() ? { context: context.trim() } : {}),
   })
+  if (!isVideoFile(file)) return
+
+  let job: Promise<void>
+  job = extractRepresentativeVideoFrames(file)
+    .then((frames) => {
+      if (!attachments.value.some(attachment => attachment.id === id)) return
+      for (const frame of frames) {
+        attachments.value.push({
+          id: `${id}-frame-${attachments.value.length}`,
+          name: frame.name,
+          type: frame.type,
+          size: frame.size,
+          url: URL.createObjectURL(frame),
+          file: frame,
+          videoFrameFor: id,
+        })
+      }
+    })
+    .catch(() => {
+      // Keep the original video attachment. Coding agents can still inspect its local path.
+    })
+    .finally(() => {
+      pendingVideoFrameJobs.delete(job)
+      isPreparingAttachments.value = pendingVideoFrameJobs.size > 0
+    })
+  pendingVideoFrameJobs.add(job)
+  isPreparingAttachments.value = true
 }
 
 function addFiles(files: File[]) {
   for (const file of files) addFile(file)
   if (files.length > 0) textareaRef.value?.focus()
-}
-
-function addBrowserAttachment(file: File, context: string) {
-  addFile(file, context)
-  textareaRef.value?.focus()
 }
 
 function handleAttachClick() {
@@ -889,11 +953,32 @@ function handleDrop(e: DragEvent) {
   addFiles(files)
 }
 
-defineExpose({ addFiles, addBrowserAttachment })
+/**
+ * Put the caret in the composer so the next keystroke lands in the message box.
+ * Refused on a phone, where taking focus raises the on-screen keyboard over the
+ * conversation the user just opened.
+ */
+function focusComposer() {
+  if (isMobileViewport.value) return
+  nextTick(() => textareaRef.value?.focus())
+}
+
+defineExpose({ addFiles, focusComposer })
 
 // --- Send ---
 
-function handleSend() {
+async function handleSend() {
+  if (isPreparingAttachments.value) {
+    if (sendAwaitingAttachments) return
+    sendAwaitingAttachments = true
+    try {
+      while (pendingVideoFrameJobs.size > 0) {
+        await Promise.allSettled([...pendingVideoFrameJobs])
+      }
+    } finally {
+      sendAwaitingAttachments = false
+    }
+  }
   const text = inputText.value.trim()
   if (!text && attachments.value.length === 0) return
   if (isBridgeSession.value && text === '/skill' && attachments.value.length === 0) {
@@ -998,11 +1083,13 @@ onUnmounted(() => {
 })
 
 function removeAttachment(id: string) {
-  const idx = attachments.value.findIndex(a => a.id === id)
-  if (idx !== -1) {
-    URL.revokeObjectURL(attachments.value[idx].url)
-    attachments.value.splice(idx, 1)
+  const removedIds = new Set([id])
+  for (const attachment of attachments.value) {
+    if (attachment.videoFrameFor === id) removedIds.add(attachment.id)
   }
+  const removed = attachments.value.filter(attachment => removedIds.has(attachment.id))
+  for (const attachment of removed) URL.revokeObjectURL(attachment.url)
+  attachments.value = attachments.value.filter(attachment => !removedIds.has(attachment.id))
 }
 
 function formatSize(bytes: number): string {
@@ -1019,9 +1106,9 @@ function isImage(type: string): boolean {
 <template>
   <div class="chat-input-area">
     <!-- Attachment previews -->
-    <div v-if="attachments.length > 0" class="attachment-previews">
+    <div v-if="attachments.some(att => !att.videoFrameFor)" class="attachment-previews">
       <div
-        v-for="att in attachments"
+        v-for="att in attachments.filter(item => !item.videoFrameFor)"
         :key="att.id"
         class="attachment-preview"
         :class="{ image: isImage(att.type), 'has-context': !!att.context }"
@@ -1138,7 +1225,7 @@ function isImage(type: string): boolean {
           </NTooltip>
 
           <NPopover
-            v-if="!isMoaSession"
+            v-if="!isMoaSession && !isGlobalCodingAgentSession"
             trigger="click"
             placement="top-start"
           >
@@ -1186,6 +1273,9 @@ function isImage(type: string): boolean {
                 <span>{{ reasoningEffortOptions[0].label }}</span>
                 <span>{{ reasoningEffortOptions[reasoningEffortOptions.length - 1].label }}</span>
               </div>
+              <div class="reasoning-effort-slider-hint">
+                {{ t('chat.reasoningEffort.dragHint', { count: reasoningEffortOptions.length }) }}
+              </div>
             </div>
           </NPopover>
 
@@ -1223,6 +1313,7 @@ function isImage(type: string): boolean {
                 quaternary
                 size="tiny"
                 class="input-model-button"
+                :disabled="props.modelDisabled"
                 :title="isMobileViewport ? undefined : props.modelLabel || t('models.selectModel')"
                 :aria-label="props.modelLabel || t('models.selectModel')"
                 @click="handleModelButtonClick"
@@ -1635,6 +1726,13 @@ function isImage(type: string): boolean {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.reasoning-effort-slider-hint {
+  margin-top: 6px;
+  color: $text-muted;
+  font-size: 11px;
+  text-align: center;
 }
 
 .reasoning-effort-slider-heading {

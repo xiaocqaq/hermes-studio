@@ -31,7 +31,6 @@ import { resolveEkkoProviderRuntimeConfig } from '../../ekko-agent/provider-runt
 import {
   createSession,
   addMessage,
-  addMessages,
   getSession,
   updateMessageDisplayContent,
   updateSession,
@@ -44,9 +43,10 @@ import { observeRunChatPetEvent } from '../pet-state-socket'
 import { contentBlocksToString, convertContentBlocksForAgent, extractTextForPreview } from './content-blocks'
 import { buildCompressedHistory, getOrCreateSession } from './compression'
 import { resolveBridgeRunModelConfig, type RunModelGroup } from './model-config'
+import { persistRunMessages, type RunMessageDraft } from './message-persistence'
 import { buildOutboundRunEvent } from './resume-payload'
 import { estimateUsageTokensFromMessages } from './usage'
-import type { ChatCodingAgentId, ContentBlock, QueuedRun, SessionState } from './types'
+import type { BackgroundContinuationContext, ChatCodingAgentId, ContentBlock, QueuedRun, SessionState } from './types'
 import { completeWorkspaceRunCheckpoint, startWorkspaceRunCheckpoint } from './workspace-diff-tracker'
 
 export interface EkkoAgentRunSocketData {
@@ -79,6 +79,7 @@ export interface EkkoAgentRunSocketData {
   peerExcludeSocketId?: string
   queue_id?: string
   reasoning_effort?: string
+  push_enabled?: boolean
   background_delegation_enabled?: boolean
   background_delegation_id?: string
   autonomous?: boolean
@@ -391,6 +392,7 @@ export async function handleEkkoAgentRun(
   sessionMap: Map<string, SessionState>,
   dequeueNextQueuedRun: (socket: Socket, sessionId: string, fallbackProfile?: string) => boolean,
   skipUserMessage = false,
+  backgroundContinuationContext?: BackgroundContinuationContext,
 ) {
   const sessionId = String(data.session_id || '').trim()
   if (!sessionId) {
@@ -401,6 +403,7 @@ export async function handleEkkoAgentRun(
     socket.emit('run.failed', { event: 'run.failed', session_id: sessionId, error: 'ekko-agent run requires coding_agent_id=ekko-agent' })
     return
   }
+  const authenticatedUserId = socket.data?.user?.id == null ? undefined : String(socket.data.user.id)
 
   socket.join(`session:${sessionId}`)
   const state = getOrCreateSession(sessionMap, sessionId)
@@ -417,6 +420,9 @@ export async function handleEkkoAgentRun(
   state.abortController = abortController
 
   const storedSession = getSession(sessionId)
+  if (storedSession && !storedSession.user_id && authenticatedUserId) {
+    updateSession(sessionId, { user_id: authenticatedUserId })
+  }
   const modelConfig = await resolveBridgeRunModelConfig({
     profile,
     sessionModel: storedSession?.model,
@@ -441,7 +447,8 @@ export async function handleEkkoAgentRun(
   const baseUrl = runtimeConfig.baseUrl || ''
   const apiMode = runtimeConfig.apiMode
   const apiKey = runtimeConfig.apiKey
-  const reasoningEffort = resolveReasoningEffort(data.reasoning_effort)
+  const persistedReasoningEffort = normalizeReasoningEffort(data.reasoning_effort ?? storedSession?.reasoning_effort)
+  const reasoningEffort = resolveReasoningEffort(persistedReasoningEffort)
   const agent = getGlobalEkkoAgent(profile)
   const workspace = data.workspace || storedSession?.workspace || agent.sessionWorkspaceDirectory(sessionId)
   const shouldEmitWorkspaceUpdate = Boolean(workspace && !storedSession?.workspace)
@@ -484,12 +491,15 @@ export async function handleEkkoAgentRun(
       source: sessionSource,
       agent: 'ekko-agent',
       agent_mode: 'scoped',
+      user_id: authenticatedUserId,
       model: modelConfig.model,
       provider: modelConfig.provider,
       api_mode: apiMode || '',
+      reasoning_effort: persistedReasoningEffort || '',
       title,
       workspace,
       category_id: data.category_id,
+      push_enabled: data.push_enabled,
     })
   } else if (
     storedSession.source !== sessionSource ||
@@ -658,6 +668,14 @@ export async function handleEkkoAgentRun(
       event.status === 'interrupted' ||
       scheduledBackgroundContinuations.has(event.subagentId)
     ) return
+    if (!event.continuationContext) {
+      logger.error(
+        '[chat-run-socket] suppressed Ekko background callback %s for session %s because its origin context is missing',
+        event.subagentId,
+        sessionId,
+      )
+      return
+    }
     scheduledBackgroundContinuations.add(event.subagentId)
     const result = String(event.output || '').trim() || event.summary.trim() || event.outputTail.trim()
     const continuationMessage = [
@@ -691,6 +709,10 @@ export async function handleEkkoAgentRun(
       mcpServers,
       reasoningEffort,
       backgroundDelegationId: event.subagentId,
+      backgroundContinuationContext: {
+        runtime: 'ekko',
+        ...event.continuationContext,
+      },
       autonomous: true,
     }
     state.queue.push(queuedRun)
@@ -753,9 +775,8 @@ export async function handleEkkoAgentRun(
     const storedToolCalls = toolCalls.map(toStoredToolCall)
     const reasoningText = agentReasoningText(group.message.reasoning)
     const reasoningDetails = serializeAgentReasoningDetails(group.message.reasoning)
-    const rows = [
+    const messages: RunMessageDraft[] = [
       {
-        session_id: sessionId,
         role: 'assistant',
         content: group.message.content || '',
         tool_calls: storedToolCalls,
@@ -772,7 +793,6 @@ export async function handleEkkoAgentRun(
           ? pendingBackgroundDisplayContent.get(backgroundSubagentId)
           : undefined
         return {
-          session_id: sessionId,
           role: 'tool',
           content: completed.result.content,
           display_content: backgroundDisplayContent,
@@ -784,14 +804,14 @@ export async function handleEkkoAgentRun(
       }),
     ]
     try {
-      const ids = addMessages(rows)
-      if (ids[0] != null) assistantMessageId = String(ids[0])
-      rows.forEach((row, index) => {
-        state.messages.push({
-          id: ids[index] || state.messages.length + 1,
-          ...row,
-        })
+      const { ids } = persistRunMessages(state, {
+        sessionId,
+        runMarker: group.runId,
+        messages,
+        appendToState: true,
+        atomic: true,
       })
+      if (ids[0] != null) assistantMessageId = String(ids[0])
       for (const toolCall of toolCalls) {
         persistedToolCallIds.add(toolCall.id)
         toolCallGroupKeys.delete(scopedToolCallId(group.runId, toolCall.id))
@@ -1150,7 +1170,6 @@ export async function handleEkkoAgentRun(
 
   try {
     logger.info('[chat-run-socket] starting ekko-agent run for session %s', sessionId)
-    const authenticatedUserId = socket.data?.user?.id == null ? undefined : String(socket.data.user.id)
     const toolContext = {
       cwd: workspace,
       workspaceRoot: workspace,
@@ -1191,6 +1210,7 @@ export async function handleEkkoAgentRun(
       }),
       requestUserClarification: (request: AgentClarificationRequest) => waitForEkkoClarification(request, {
         sessionId,
+        runId: runId || turnId,
         signal: abortController.signal,
         onRequested: pending => {
           emit('clarify.requested', {
@@ -1219,36 +1239,48 @@ export async function handleEkkoAgentRun(
       user_id: authenticatedUserId,
       profile,
     }
+    const callbackContext = data.background_delegation_id
+      && backgroundContinuationContext?.runtime === 'ekko'
+      && backgroundContinuationContext.subagentId === data.background_delegation_id
+      ? backgroundContinuationContext
+      : undefined
+    if (data.background_delegation_id && !callbackContext) {
+      throw new Error(
+        `Background callback ${data.background_delegation_id} cannot continue because its origin context is unavailable.`,
+      )
+    }
     let fixedContextEstimate: Promise<number> | undefined
-    const compressedHistory = data.context_compression_enabled === false ? [] : await buildCompressedHistory(
-      sessionId,
-      profile,
-      baseUrl,
-      apiKey,
-      emit,
-      sessionMap,
-      {
-        model: modelConfig.model,
-        provider: modelConfig.provider,
-        allowHermesFallback: false,
-      },
-      async (_messages, localMessageTokens) => {
-        fixedContextEstimate ||= agent.estimateContext({
-          modelClient,
+    const compressedHistory = callbackContext
+      ? []
+      : data.context_compression_enabled === false ? [] : await buildCompressedHistory(
+        sessionId,
+        profile,
+        baseUrl,
+        apiKey,
+        emit,
+        sessionMap,
+        {
           model: modelConfig.model,
-          modelDefaults: { model: modelConfig.model },
-          messages: instructionMessages,
-          signal: abortController.signal,
-          memoryEnabled: false,
-          toolContext,
-          metadata,
-          backgroundDelegationEnabled: data.background_delegation_enabled !== false,
-        }).then(estimate => estimate.contextTokens)
-        return (await fixedContextEstimate) + localMessageTokens
-      },
-      currentInputTokens,
-      shouldPersistUserMessage && data.display_role !== 'command',
-    )
+          provider: modelConfig.provider,
+          allowHermesFallback: false,
+        },
+        async (_messages, localMessageTokens) => {
+          fixedContextEstimate ||= agent.estimateContext({
+            modelClient,
+            model: modelConfig.model,
+            modelDefaults: { model: modelConfig.model },
+            messages: instructionMessages,
+            signal: abortController.signal,
+            memoryEnabled: false,
+            toolContext,
+            metadata,
+            backgroundDelegationEnabled: data.background_delegation_enabled !== false,
+          }).then(estimate => estimate.contextTokens)
+          return (await fixedContextEstimate) + localMessageTokens
+        },
+        currentInputTokens,
+        shouldPersistUserMessage && data.display_role !== 'command',
+      )
     const currentMessage: AgentMessage = {
       role: 'user',
       ...await toUserAgentContent(data.input),
@@ -1265,7 +1297,9 @@ export async function handleEkkoAgentRun(
       },
       messages: [
         ...instructionMessages,
-        ...await toAgentMessages(compressedHistory),
+        ...(callbackContext
+          ? structuredClone(callbackContext.messages)
+          : await toAgentMessages(compressedHistory)),
         currentMessage,
       ],
       signal: abortController.signal,
@@ -1309,14 +1343,24 @@ export async function handleEkkoAgentRun(
       },
       toolContext,
       metadata,
+      ...(callbackContext
+        ? {
+            contextKey: `${sessionId}:background-callback:${callbackContext.subagentId}`,
+            memoryEnabled: false,
+            ephemeralContext: true,
+            skillReviewEnabled: false,
+          }
+        : {}),
       backgroundDelegationEnabled: data.background_delegation_enabled !== false,
     })
     assistantText = result.output.content || assistantText
+    const persistedRunMarker = runId || result.runId
     const outputUsage = result.output.usage
     if (outputUsage && !usageInput && !usageOutput) {
       usageInput += outputUsage.inputTokens || 0
       usageOutput += outputUsage.outputTokens || 0
     }
+    const unpersistedStepMessages: RunMessageDraft[] = []
     for (const step of result.steps) {
       if (step.type === 'model' && step.message.toolCalls?.length) {
         const unpersistedToolCalls = step.message.toolCalls.filter(call => !persistedToolCallIds.has(call.id))
@@ -1325,21 +1369,7 @@ export async function handleEkkoAgentRun(
         const timestamp = Math.floor(Date.now() / 1000)
         const reasoningText = agentReasoningText(step.message.reasoning)
         const reasoningDetails = serializeAgentReasoningDetails(step.message.reasoning)
-        const assistantId = addMessage({
-          session_id: sessionId,
-          role: 'assistant',
-          content: step.message.content || '',
-          tool_calls: toolCalls,
-          timestamp,
-          finish_reason: 'tool_calls',
-          reasoning: reasoningText || null,
-          reasoning_details: reasoningDetails,
-          reasoning_content: reasoningText || null,
-        })
-        if (assistantId != null) assistantMessageId = String(assistantId)
-        state.messages.push({
-          id: assistantId || state.messages.length + 1,
-          session_id: sessionId,
+        unpersistedStepMessages.push({
           role: 'assistant',
           content: step.message.content || '',
           tool_calls: toolCalls,
@@ -1352,18 +1382,7 @@ export async function handleEkkoAgentRun(
       } else if (step.type === 'tool') {
         if (persistedToolCallIds.has(step.toolCallId)) continue
         const timestamp = Math.floor(Date.now() / 1000)
-        const toolId = addMessage({
-          session_id: sessionId,
-          role: 'tool',
-          content: step.result.content,
-          tool_call_id: step.toolCallId,
-          tool_name: step.toolName,
-          timestamp,
-          finish_reason: step.result.ok ? null : 'error',
-        })
-        state.messages.push({
-          id: toolId || state.messages.length + 1,
-          session_id: sessionId,
+        unpersistedStepMessages.push({
           role: 'tool',
           content: step.result.content,
           tool_call_id: step.toolCallId,
@@ -1372,6 +1391,20 @@ export async function handleEkkoAgentRun(
           finish_reason: step.result.ok ? null : 'error',
         })
       }
+    }
+    if (unpersistedStepMessages.length) {
+      const persistedSteps = persistRunMessages(state, {
+        sessionId,
+        runMarker: persistedRunMarker,
+        messages: unpersistedStepMessages,
+        appendToState: true,
+        atomic: true,
+      })
+      const lastToolCallAssistantIndex = unpersistedStepMessages.findLastIndex(message => (
+        message.role === 'assistant' && Boolean(message.tool_calls?.length)
+      ))
+      const persistedId = persistedSteps.ids[lastToolCallAssistantIndex]
+      if (persistedId != null) assistantMessageId = String(persistedId)
     }
     assistantReasoning = agentReasoningText(result.output.reasoning) || assistantReasoning
     const hadToolActivity = result.steps.some(step => step.type === 'tool')
@@ -1408,28 +1441,21 @@ export async function handleEkkoAgentRun(
     }
     if (assistantText.trim() || assistantReasoning.trim()) {
       const reasoningDetails = serializeAgentReasoningDetails(result.output.reasoning)
-      const assistantId = addMessage({
-        session_id: sessionId,
-        role: 'assistant',
-        content: assistantText,
-        timestamp: Math.floor(Date.now() / 1000),
-        finish_reason: result.output.finishReason || null,
-        reasoning: assistantReasoning || null,
-        reasoning_details: reasoningDetails,
-        reasoning_content: assistantReasoning || null,
+      const { ids: [assistantId] } = persistRunMessages(state, {
+        sessionId,
+        runMarker: persistedRunMarker,
+        appendToState: true,
+        messages: [{
+          role: 'assistant',
+          content: assistantText,
+          timestamp: Math.floor(Date.now() / 1000),
+          finish_reason: result.output.finishReason || null,
+          reasoning: assistantReasoning || null,
+          reasoning_details: reasoningDetails,
+          reasoning_content: assistantReasoning || null,
+        }],
       })
       if (assistantId != null) assistantMessageId = String(assistantId)
-      state.messages.push({
-        id: assistantId || state.messages.length + 1,
-        session_id: sessionId,
-        role: 'assistant',
-        content: assistantText,
-        timestamp: Math.floor(Date.now() / 1000),
-        finish_reason: result.output.finishReason || null,
-        reasoning: assistantReasoning || null,
-        reasoning_details: reasoningDetails,
-        reasoning_content: assistantReasoning || null,
-      })
     }
     if (!usageInput && !usageOutput) {
       const usage = estimateUsageTokensFromMessages([

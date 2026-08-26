@@ -26,6 +26,7 @@ vi.mock('@/api/hermes/chat', () => ({
   onSessionCommand: vi.fn(() => vi.fn()),
   onSessionTitleUpdated: vi.fn(() => vi.fn()),
   onSessionWorkspaceUpdated: vi.fn(() => vi.fn()),
+  onSessionSettingsUpdated: vi.fn(() => vi.fn()),
 }))
 
 vi.mock('@/api/client', () => ({
@@ -100,6 +101,7 @@ describe('chat store reasoning/tool boundaries', () => {
     onEvent({
       event: 'tool.started',
       session_id: 'session-1',
+      run_marker: 'run-1',
       tool_call_id: 'tool-1',
       tool: 'shell',
       arguments: '{}',
@@ -108,6 +110,7 @@ describe('chat store reasoning/tool boundaries', () => {
     onEvent({
       event: 'tool.completed',
       session_id: 'session-1',
+      run_marker: 'run-1',
       tool_call_id: 'tool-1',
       output: 'tool output',
     } as RunEvent)
@@ -130,6 +133,7 @@ describe('chat store reasoning/tool boundaries', () => {
       toolStatus: 'done',
       toolResult: 'tool output',
       reasoning: 'think before. ',
+      runMarker: 'run-1',
     }))
     expect(store.messages[3]).toEqual(expect.objectContaining({
       role: 'assistant',
@@ -184,6 +188,7 @@ describe('chat store reasoning/tool boundaries', () => {
           role: 'tool',
           content: 'file contents',
           tool_call_id: 'tool-1',
+          run_marker: 'run-1',
           timestamp: 2,
         },
       ],
@@ -200,6 +205,206 @@ describe('chat store reasoning/tool boundaries', () => {
         toolCallId: 'tool-1',
         reasoning: 'I should inspect the file before answering.',
         toolResult: 'file contents',
+        runMarker: 'run-1',
+      }),
+    ])
+  })
+
+  it('restores repeated tool ids with metadata from their own runs', async () => {
+    const store = useChatStore()
+    const session = makeSession()
+    store.sessions = [session]
+    store.activeSessionId = 'session-1'
+    store.activeSession = session
+    sessionsApi.fetchSessionMessagesPage.mockResolvedValue({
+      session: { id: 'session-1', title: 'session' },
+      messages: [
+        {
+          id: 1,
+          role: 'assistant',
+          content: '',
+          reasoning: 'reasoning for run A',
+          run_marker: 'run-a',
+          tool_calls: [{
+            id: 'item_2',
+            type: 'function',
+            function: { name: 'Command', arguments: '{"command":"pwd"}' },
+          }],
+          timestamp: 1,
+          finish_reason: 'tool_calls',
+        },
+        {
+          id: 2,
+          role: 'tool',
+          content: 'result A',
+          tool_call_id: 'item_2',
+          run_marker: 'run-a',
+          timestamp: 2,
+        },
+        {
+          id: 3,
+          role: 'assistant',
+          content: '',
+          reasoning: 'reasoning for run B',
+          run_marker: 'run-b',
+          tool_calls: [{
+            id: 'item_2',
+            type: 'function',
+            function: { name: 'Web Search', arguments: '{"query":"Hermes"}' },
+          }],
+          timestamp: 3,
+          finish_reason: 'tool_calls',
+        },
+        {
+          id: 4,
+          role: 'tool',
+          content: 'result B',
+          tool_call_id: 'item_2',
+          run_marker: 'run-b',
+          timestamp: 4,
+        },
+      ],
+      total: 4,
+      hasMore: false,
+    })
+
+    await store.refreshActiveSession()
+
+    expect(store.messages).toEqual([
+      expect.objectContaining({
+        role: 'tool',
+        toolCallId: 'item_2',
+        runMarker: 'run-a',
+        toolName: 'Command',
+        toolArgs: '{"command":"pwd"}',
+        reasoning: 'reasoning for run A',
+        toolResult: 'result A',
+      }),
+      expect.objectContaining({
+        role: 'tool',
+        toolCallId: 'item_2',
+        runMarker: 'run-b',
+        toolName: 'Web Search',
+        toolArgs: '{"query":"Hermes"}',
+        reasoning: 'reasoning for run B',
+        toolResult: 'result B',
+      }),
+    ])
+  })
+
+  it('keeps repeated coding-agent tool ids separate across live runs', async () => {
+    const store = useChatStore()
+    const session = makeSession()
+    session.source = 'coding_agent'
+    session.agent = 'codex'
+    session.codingAgentId = 'codex'
+    session.messages = [{
+      id: 'old-tool',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now() - 1_000,
+      toolName: 'Command',
+      toolCallId: 'item_2',
+      toolArgs: '{"command":"pwd"}',
+      toolResult: 'old result',
+      toolStatus: 'done',
+      runMarker: 'run-a',
+    }]
+    store.sessions = [session]
+    store.activeSessionId = 'session-1'
+    store.activeSession = session
+
+    await store.sendMessage('run another command')
+
+    const onEvent = chatApi.startRunViaSocket.mock.calls[0][1] as (event: RunEvent) => void
+    onEvent({ event: 'run.started', session_id: 'session-1', run_marker: 'run-b' })
+    onEvent({
+      event: 'tool.started',
+      session_id: 'session-1',
+      run_marker: 'run-b',
+      tool_call_id: 'item_2',
+      tool: 'Command',
+      arguments: '{"command":"ls"}',
+    } as RunEvent)
+
+    expect(store.messages.filter(message => message.role === 'tool')).toEqual([
+      expect.objectContaining({
+        id: 'old-tool',
+        runMarker: 'run-a',
+        toolStatus: 'done',
+        toolResult: 'old result',
+      }),
+      expect.objectContaining({
+        runMarker: 'run-b',
+        toolStatus: 'running',
+        toolArgs: '{"command":"ls"}',
+      }),
+    ])
+
+    onEvent({
+      event: 'tool.completed',
+      session_id: 'session-1',
+      run_marker: 'run-b',
+      tool_call_id: 'item_2',
+      tool: 'Command',
+      output: 'new result',
+    } as RunEvent)
+
+    expect(store.messages.filter(message => message.role === 'tool')).toEqual([
+      expect.objectContaining({
+        id: 'old-tool',
+        runMarker: 'run-a',
+        toolStatus: 'done',
+        toolResult: 'old result',
+      }),
+      expect.objectContaining({
+        runMarker: 'run-b',
+        toolStatus: 'done',
+        toolResult: 'new result',
+      }),
+    ])
+  })
+
+  it('creates a scoped tool row when completion arrives without a start event', async () => {
+    const store = useChatStore()
+    const session = makeSession()
+    session.messages = [{
+      id: 'old-tool',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now() - 1_000,
+      toolName: 'Command',
+      toolCallId: 'item_2',
+      toolResult: 'old result',
+      toolStatus: 'done',
+      runMarker: 'run-a',
+    }]
+    store.sessions = [session]
+    store.activeSessionId = 'session-1'
+    store.activeSession = session
+
+    await store.sendMessage('resume the run')
+
+    const onEvent = chatApi.startRunViaSocket.mock.calls[0][1] as (event: RunEvent) => void
+    onEvent({
+      event: 'tool.completed',
+      session_id: 'session-1',
+      run_marker: 'run-b',
+      tool_call_id: 'item_2',
+      tool: 'Command',
+      output: 'replayed result',
+    } as RunEvent)
+
+    expect(store.messages.filter(message => message.role === 'tool')).toEqual([
+      expect.objectContaining({
+        id: 'old-tool',
+        runMarker: 'run-a',
+        toolResult: 'old result',
+      }),
+      expect.objectContaining({
+        runMarker: 'run-b',
+        toolStatus: 'done',
+        toolResult: 'replayed result',
       }),
     ])
   })
@@ -708,6 +913,7 @@ describe('chat store reasoning/tool boundaries', () => {
     session.baseUrl = 'https://api.xiaomimimo.com/v1'
     session.apiKey = 'sk-xiaomi'
     session.apiMode = 'chat_completions'
+    session.reasoningEffort = 'high'
     store.sessions = [session]
     store.activeSessionId = 'session-1'
     store.activeSession = session
@@ -726,6 +932,7 @@ describe('chat store reasoning/tool boundaries', () => {
     expect(session.baseUrl).toBeUndefined()
     expect(session.apiKey).toBeUndefined()
     expect(session.apiMode).toBe('chat_completions')
+    expect(session.reasoningEffort).toBeUndefined()
   })
 
   it('keeps a local-only session workspace when switching models before the first message', async () => {
@@ -735,6 +942,7 @@ describe('chat store reasoning/tool boundaries', () => {
     session.workspace = 'D:\\projects\\hermes'
     session.provider = 'deepseek'
     session.model = 'deepseek-chat'
+    session.reasoningEffort = 'max'
     store.sessions = [session]
     store.activeSessionId = 'session-1'
     store.activeSession = session
@@ -745,6 +953,7 @@ describe('chat store reasoning/tool boundaries', () => {
     expect(sessionsApi.setSessionModel).not.toHaveBeenCalled()
     expect(session.model).toBe('deepseek-reasoner')
     expect(session.provider).toBe('deepseek')
+    expect(session.reasoningEffort).toBeUndefined()
     expect(session.workspace).toBe('D:\\projects\\hermes')
     expect(session.isLocalOnly).toBe(true)
 

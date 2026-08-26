@@ -76,7 +76,7 @@ const statusItems = computed(() => {
 });
 
 type DisplayContentFile = {
-  type: 'image' | 'file'
+  type: 'image' | 'video' | 'file'
   name: string
   path?: string
   url?: string
@@ -173,6 +173,7 @@ const contentFiles = computed<DisplayContentFile[] | null>(() => {
   if (!isContentBlockArray.value) return null;
 
   return contentBlocks.value!.flatMap<DisplayContentFile>((block, index) => {
+    if ((block as any).video_frame === true) return []
     if (block.type === 'image') {
       return [{
         type: 'image' as const,
@@ -182,9 +183,11 @@ const contentFiles = computed<DisplayContentFile[] | null>(() => {
       }].filter(file => file.path)
     }
     if (block.type === 'file') {
+      const name = String((block as any).name || `file-${index + 1}`)
+      const mediaType = String((block as any).media_type || '')
       return [{
-        type: 'file' as const,
-        name: String((block as any).name || `file-${index + 1}`),
+        type: isVideo(mediaType, name) ? 'video' as const : 'file' as const,
+        name,
         path: String((block as any).path || ''),
         context: typeof (block as any).context === 'string' ? (block as any).context : undefined,
       }].filter(file => file.path)
@@ -359,6 +362,10 @@ const timeStr = computed(() => formatChatTimestamp(props.message.timestamp));
 
 function isImage(type: string): boolean {
   return type.startsWith("image/");
+}
+
+function isVideo(type: string, name: string): boolean {
+  return type.startsWith("video/") || /\.(?:mp4|mov|m4v|webm)$/i.test(name);
 }
 
 function formatSize(bytes: number): string {
@@ -930,26 +937,67 @@ onBeforeUnmount(() => {
           v-if="message.toolStatus === 'running'"
           class="tool-spinner"
         ></span>
-        <span v-if="message.toolStatus === 'error'" class="tool-error-badge">{{
-          t("chat.error")
-        }}</span>
+        <svg
+          v-if="message.toolStatus === 'done'"
+          class="tool-status-icon tool-success-icon"
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          :aria-label="t('subagent.completed')"
+          role="img"
+        >
+          <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.14" />
+          <path
+            d="m8 12 3 3 5-6"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </svg>
+        <svg
+          v-if="message.toolStatus === 'error'"
+          class="tool-error-badge tool-status-icon"
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          :aria-label="t('subagent.failed')"
+          role="img"
+        >
+          <circle cx="12" cy="12" r="10" fill="currentColor" fill-opacity="0.14" />
+          <path
+            d="m9 9 6 6m0-6-6 6"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </svg>
       </div>
-      <div v-if="!isSubagentTool && toolExpanded && hasToolDetails" class="tool-details" @click="handleToolDetailClick">
-        <div v-if="message.reasoning?.trim()" class="tool-detail-section">
-          <div class="tool-detail-label">{{ t("chat.thinkingLabel") }}</div>
-          <div class="tool-detail-reasoning">
-            <MarkdownRenderer :content="message.reasoning" />
+      <Transition name="tool-detail-expand">
+        <div
+          v-if="!isSubagentTool && toolExpanded && hasToolDetails"
+          class="tool-details-expand"
+        >
+          <div class="tool-details" @click="handleToolDetailClick">
+            <div v-if="message.reasoning?.trim()" class="tool-detail-section">
+              <div class="tool-detail-label">{{ t("chat.thinkingLabel") }}</div>
+              <div class="tool-detail-reasoning">
+                <MarkdownRenderer :content="message.reasoning" />
+              </div>
+            </div>
+            <div v-if="formattedToolArgs" class="tool-detail-section" data-copy-source="tool-args">
+              <div class="tool-detail-label">{{ t("chat.arguments") }}</div>
+              <div class="tool-detail-code-block" v-html="renderedToolArgs"></div>
+            </div>
+            <div v-if="formattedToolResult" class="tool-detail-section" data-copy-source="tool-result">
+              <div class="tool-detail-label">{{ t("chat.result") }}</div>
+              <div class="tool-detail-code-block" v-html="renderedToolResult"></div>
+            </div>
           </div>
         </div>
-        <div v-if="formattedToolArgs" class="tool-detail-section" data-copy-source="tool-args">
-          <div class="tool-detail-label">{{ t("chat.arguments") }}</div>
-          <div class="tool-detail-code-block" v-html="renderedToolArgs"></div>
-        </div>
-        <div v-if="formattedToolResult" class="tool-detail-section" data-copy-source="tool-result">
-          <div class="tool-detail-label">{{ t("chat.result") }}</div>
-          <div class="tool-detail-code-block" v-html="renderedToolResult"></div>
-        </div>
-      </div>
+      </Transition>
     </template>
     <template v-else>
       <div class="msg-body">
@@ -976,7 +1024,11 @@ onBeforeUnmount(() => {
                 v-for="att in message.attachments"
                 :key="att.id"
                 class="msg-attachment"
-                :class="{ image: isImage(att.type), 'has-context': !!att.context }"
+                :class="{
+                  image: isImage(att.type),
+                  video: message.role === 'user' && isVideo(att.type, att.name),
+                  'has-context': !!att.context,
+                }"
               >
                 <template v-if="isImage(att.type) && att.url">
                   <img
@@ -985,6 +1037,19 @@ onBeforeUnmount(() => {
                     class="msg-attachment-thumb"
                     @click="previewUrl = att.url"
                   />
+                </template>
+                <template v-else-if="message.role === 'user' && isVideo(att.type, att.name) && att.url">
+                  <video
+                    class="msg-attachment-video"
+                    :src="att.url"
+                    controls
+                    playsinline
+                    preload="metadata"
+                  ></video>
+                  <div class="msg-attachment-video-footer">
+                    <span class="att-name">{{ att.name }}</span>
+                    <span class="att-size">{{ formatSize(att.size) }}</span>
+                  </div>
                 </template>
                 <template v-else>
                   <div class="msg-attachment-file" @click="handleAttachmentDownload(att)" style="cursor: pointer;" :title="t('download.downloadFile')">
@@ -1068,7 +1133,11 @@ onBeforeUnmount(() => {
                     v-for="(file, idx) in contentFiles"
                     :key="idx"
                     class="msg-attachment"
-                    :class="{ image: file.type === 'image', 'has-context': !!file.context }"
+                    :class="{
+                      image: file.type === 'image',
+                      video: file.type === 'video',
+                      'has-context': !!file.context,
+                    }"
                   >
                     <template v-if="file.type === 'image'">
                       <img
@@ -1077,6 +1146,18 @@ onBeforeUnmount(() => {
                         class="msg-attachment-thumb"
                         @click="previewUrl = getContentFileUrl(file)"
                       />
+                    </template>
+                    <template v-else-if="file.type === 'video'">
+                      <video
+                        class="msg-attachment-video"
+                        :src="getContentFileUrl(file)"
+                        controls
+                        playsinline
+                        preload="metadata"
+                      ></video>
+                      <div class="msg-attachment-video-footer">
+                        <span class="att-name">{{ file.name }}</span>
+                      </div>
                     </template>
                     <template v-else>
                       <div
@@ -1528,6 +1609,11 @@ onBeforeUnmount(() => {
   &.image.has-context {
     max-width: 420px;
   }
+
+  &.video {
+    width: min(360px, 100%);
+    background: #000;
+  }
 }
 
 .msg-attachment-thumb {
@@ -1541,6 +1627,39 @@ onBeforeUnmount(() => {
 .msg-attachment.has-context .msg-attachment-thumb {
   max-width: 420px;
   max-height: 280px;
+}
+
+.msg-attachment-video {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 280px;
+  background: #000;
+  object-fit: contain;
+}
+
+.msg-attachment-video-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  color: $text-secondary;
+  background: rgba(0, 0, 0, 0.04);
+  font-size: 12px;
+
+  .att-name {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .att-size {
+    flex-shrink: 0;
+    color: $text-muted;
+    font-size: 11px;
+  }
 }
 
 .msg-attachment-context {
@@ -1781,21 +1900,55 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-.tool-error-badge {
-  font-size: 9px;
-  color: $error;
-  background: rgba(var(--error-rgb), 0.08);
-  padding: 0 4px;
-  border-radius: 3px;
-  line-height: 14px;
+.tool-status-icon {
+  flex: 0 0 auto;
   margin-inline-start: 4px;
 }
 
+.tool-success-icon {
+  color: $success;
+}
+
+.tool-error-badge {
+  color: $error;
+}
+
+.tool-details-expand {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .tool-details {
+  min-height: 0;
+  overflow: hidden;
   margin-inline-start: 16px;
   margin-top: 2px;
   border-inline-start: 2px solid $border-light;
   padding-inline-start: 10px;
+}
+
+.tool-detail-expand-enter-active,
+.tool-detail-expand-leave-active {
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 150ms ease,
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tool-detail-expand-enter-from,
+.tool-detail-expand-leave-to {
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-detail-expand-enter-active,
+  .tool-detail-expand-leave-active {
+    transition: none;
+  }
 }
 
 .tool-detail-section {
