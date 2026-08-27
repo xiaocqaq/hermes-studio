@@ -507,6 +507,39 @@ describe('chat store session.command fanout', () => {
     }))
   })
 
+  it('reconciles a duplicate peer message without marking an idle session as working', () => {
+    const store = useChatStore()
+    const session = makeSession()
+    session.messages = [{
+      id: 'phone-message-1',
+      role: 'user',
+      content: 'Message from phone',
+      timestamp: 2,
+    }]
+    store.sessions = [session]
+    store.activeSessionId = 'session-1'
+    store.activeSession = session
+
+    chatApi.peerUserMessageHandlers.forEach(handler => handler({
+      event: 'run.peer_user_message',
+      session_id: 'session-1',
+      message: {
+        id: 'phone-message-1',
+        role: 'user',
+        content: 'Message from phone',
+        timestamp: 2,
+      },
+    }))
+
+    expect(chatApi.resumeSession).toHaveBeenCalledWith(
+      'session-1',
+      expect.any(Function),
+      undefined,
+      'chat-run',
+    )
+    expect(store.isStreaming).toBe(false)
+  })
+
   it('moves an existing peer command queue entry into the transcript when the command starts', () => {
     const store = useChatStore()
     const session = makeSession()

@@ -3270,6 +3270,15 @@ export const useChatStore = defineStore('chat', () => {
     return true
   }
 
+  function clearQueuedUserMessages(sessionId: string) {
+    const nextMap = new Map(queuedUserMessages.value)
+    nextMap.delete(sessionId)
+    queuedUserMessages.value = nextMap
+    const nextLengths = new Map(queueLengths.value)
+    nextLengths.delete(sessionId)
+    queueLengths.value = nextLengths
+  }
+
   function removeQueuedMessage(sessionId: string, messageId: string) {
     if (!dropQueuedUserMessage(sessionId, messageId)) return
     getChatRunSocket(runtimeTransport())?.emit('cancel_queued_run', {
@@ -3894,6 +3903,7 @@ export const useChatStore = defineStore('chat', () => {
         serverWorking.value.delete(sid)
         // The run is over: its start must not leak into the next one.
         clearRunStartedAt(sid)
+        clearQueuedUserMessages(sid)
       }
 
       // Per-active-run flags used to detect silently-swallowed errors at run.completed.
@@ -4685,6 +4695,7 @@ export const useChatStore = defineStore('chat', () => {
       streamStates.value.delete(sid)
       serverWorking.value.delete(sid)
       clearRunStartedAt(sid)
+      clearQueuedUserMessages(sid)
       // Unregister from global session handlers
       unregisterSessionHandlers(sid)
     }
@@ -5205,6 +5216,7 @@ export const useChatStore = defineStore('chat', () => {
           } else {
             markSessionCompletedUnread(sid)
             markIdleKeepingBackgroundListener()
+            clearQueuedUserMessages(sid)
             activeAssistantMessageId = null
             reasoningAssistantMessageId = null
             activeRunMarker = null
@@ -5249,6 +5261,7 @@ export const useChatStore = defineStore('chat', () => {
             cleanup()
           } else if (hasBackground && !hasQueue) {
             markIdleKeepingBackgroundListener()
+            clearQueuedUserMessages(sid)
           }
           activeAssistantMessageId = null
           reasoningAssistantMessageId = null
@@ -5324,16 +5337,14 @@ export const useChatStore = defineStore('chat', () => {
     const isPeerCommand = peer?.role === 'command'
     const msgs = getSessionMsgs(sid)
     if (messageId && msgs.some(msg => msg.id === messageId)) {
-      serverWorking.value.add(sid)
-      resumeServerWorkingRun(sid, true)
+      if (!streamStates.value.has(sid)) resumeSessionSnapshot(sid)
       return
     }
     if (messageId && (queuedUserMessages.value.get(sid) || []).some(msg => msg.id === messageId)) {
       if (isPeerCommand && !peer?.queued) {
         dropQueuedUserMessage(sid, messageId)
       } else {
-        serverWorking.value.add(sid)
-        resumeServerWorkingRun(sid, true)
+        if (!streamStates.value.has(sid)) resumeSessionSnapshot(sid)
         return
       }
     }

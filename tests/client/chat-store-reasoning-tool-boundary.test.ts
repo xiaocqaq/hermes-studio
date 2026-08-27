@@ -752,6 +752,34 @@ describe('chat store reasoning/tool boundaries', () => {
     ])
   })
 
+  it('clears stale queued messages when the completed run reports an empty queue', async () => {
+    const store = useChatStore()
+    const session = makeSession()
+    session.source = 'coding_agent'
+    session.agent = 'claude'
+    session.codingAgentId = 'claude-code'
+    store.sessions = [session]
+    store.activeSessionId = 'session-1'
+    store.activeSession = session
+
+    await store.sendMessage('first input')
+    const onEvent = chatApi.startRunViaSocket.mock.calls[0][1] as (event: RunEvent) => void
+    onEvent({ event: 'run.started', session_id: 'session-1' })
+    await store.sendMessage('queued follow-up')
+
+    expect(store.queuedUserMessages.get('session-1')).toHaveLength(1)
+
+    onEvent({
+      event: 'run.completed',
+      session_id: 'session-1',
+      output: 'done',
+      queue_remaining: 0,
+    } as RunEvent)
+
+    expect(store.queuedUserMessages.get('session-1')).toBeUndefined()
+    expect(store.isStreaming).toBe(false)
+  })
+
   it('queues unknown slash commands in bridge sessions as normal user input', async () => {
     const store = useChatStore()
     const session = makeSession()
