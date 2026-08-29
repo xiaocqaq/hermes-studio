@@ -1,3 +1,8 @@
 # Shell scripts must keep LF: CRLF breaks them both locally under Git Bash
 # ($'\r': command not found) and inside heredocs piped to a remote shell.
 *.sh text eol=lf
+
+# Python must keep LF too. scripts/ops/patch-vacuum-guard.py matches an exact
+# LF-terminated snippet of the server's hermes_state.py; a CRLF checkout makes
+# that literal contain \r\n, the match count drops to 0 and the patch aborts.
+*.py text eol=lf
