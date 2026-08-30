@@ -2,11 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useChatStore } from '@/stores/hermes/chat'
-import { resumeSession, onSessionActivity } from '@/api/hermes/chat'
-import { fetchSessionMessagesPage, fetchSessions } from '@/api/hermes/sessions'
+import { resumeSession, onSessionActivity } from '@/api/studio/chat'
+import { fetchSessionMessagesPage, fetchSessions } from '@/api/studio/sessions'
 import { readCachedSession, writeCachedSession } from '@/utils/hermes/message-cache'
 
-vi.mock('@/api/hermes/sessions', () => ({
+vi.mock('@/api/studio/sessions', () => ({
   archiveSession: vi.fn(),
   fetchSessions: vi.fn(),
   fetchSessionMessagesPage: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock('@/api/hermes/sessions', () => ({
   setSessionReasoningEffort: vi.fn(),
 }))
 
-vi.mock('@/api/hermes/chat', () => {
+vi.mock('@/api/studio/chat', () => {
   // Inlined rather than built by a helper: this factory runs while the store's
   // imports are still being evaluated, before this file's own bindings exist.
   const row = (id: number, role: string, content: string) => ({
@@ -82,7 +82,7 @@ vi.mock('@/api/client', () => ({
   hasApiKey: () => false,
 }))
 
-vi.mock('@/api/hermes/download', () => ({
+vi.mock('@/api/studio/download', () => ({
   getDownloadUrl: (_path: string, name: string) => `/download/${name}`,
 }))
 

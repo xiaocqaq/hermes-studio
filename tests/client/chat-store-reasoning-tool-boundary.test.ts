@@ -14,7 +14,7 @@ const sessionsApi = vi.hoisted(() => ({
   setSessionModel: vi.fn(),
 }))
 
-vi.mock('@/api/hermes/chat', () => ({
+vi.mock('@/api/studio/chat', () => ({
   startRunViaSocket: chatApi.startRunViaSocket,
   resumeSession: vi.fn(),
   registerSessionHandlers: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@/api/client', () => ({
   hasApiKey: () => false,
 }))
 
-vi.mock('@/api/hermes/sessions', () => ({
+vi.mock('@/api/studio/sessions', () => ({
   deleteSession: sessionsApi.deleteSession,
   fetchSessionMessagesPage: sessionsApi.fetchSessionMessagesPage,
   fetchSessions: sessionsApi.fetchSessions,
@@ -44,7 +44,7 @@ vi.mock('@/api/hermes/sessions', () => ({
   setSessionModel: sessionsApi.setSessionModel,
 }))
 
-vi.mock('@/api/hermes/download', () => ({
+vi.mock('@/api/studio/download', () => ({
   getDownloadUrl: (_path: string, name: string) => `/download/${name}`,
 }))
 
@@ -65,7 +65,7 @@ vi.mock('@/utils/completion-sound', () => ({
 }))
 
 import { useChatStore, type Session } from '@/stores/hermes/chat'
-import type { RunEvent } from '@/api/hermes/chat'
+import type { RunEvent } from '@/api/studio/chat'
 
 function makeSession(): Session {
   return {
