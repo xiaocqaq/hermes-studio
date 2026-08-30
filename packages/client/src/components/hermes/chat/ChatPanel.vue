@@ -1204,10 +1204,19 @@ async function confirmNewChat() {
         await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
         return;
       }
-    } catch {
-      showNewChatModal.value = false;
-      await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
-      return;
+    } catch (error) {
+      // GET /api/hermes/runtime-versions is gated behind requireSuperAdmin, but
+      // this probe runs on an ordinary user action. A 403/401 means "you may not
+      // read the runtime inventory" — it says nothing about whether the runtime
+      // is installed, so treating it as "missing" locks every non-super_admin
+      // out of creating a Hermes session entirely. Only send someone to the
+      // installer when we actually learned the runtime is absent.
+      const status = (error as { status?: number } | null)?.status;
+      if (status !== 403 && status !== 401) {
+        showNewChatModal.value = false;
+        await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        return;
+      }
     } finally {
       newChatLoading.value = false;
     }
