@@ -3,6 +3,7 @@ import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { NAlert, NButton, NDataTable, NEmpty, NModal, NPopconfirm, NSpin, NTabPane, NTabs, NTag, useMessage } from 'naive-ui'
 import type { DataTableColumns } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import QRCode from 'qrcode'
 import {
   createLanAppAuthorization,
@@ -13,13 +14,21 @@ import {
   type AppConnectionAccessFailure,
   type CloudAppAuthorizationResponse,
   type LanAppAuthorizationResponse,
-} from '@/api/hermes/app-connections'
+} from '@/api/studio/app-connections'
 import {
   fetchAppRelayStatus,
   updateAppRelayRoute,
   type AppRelayRoute,
-} from '@/api/hermes/app-relay'
-import { fetchStudioVersionManifest, type StudioMobileRelease } from '@/api/studio-versions'
+} from '@/api/studio/app-relay'
+import { fetchStudioVersionManifest, type StudioMobileRelease } from '@/api/studio/versions'
+import SocialMessagesView from '@/views/social-messages/SocialMessagesView.vue'
+
+type AppPanelView = 'list' | 'download' | 'messages'
+
+function normalizePanelView(value: unknown): AppPanelView {
+  if (value === 'list' || value === 'messages') return value
+  return 'download'
+}
 
 const DISMISSED_ACCESS_FAILURE_KEY = 'hermes:app-access-failure-dismissed-at'
 const DEFAULT_MOBILE_RELEASE: StudioMobileRelease = {
@@ -37,9 +46,11 @@ const DEFAULT_MOBILE_RELEASE: StudioMobileRelease = {
 }
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const message = useMessage()
 const loading = ref(false)
-const panelView = ref<'list' | 'download'>('download')
+const panelView = ref<AppPanelView>(normalizePanelView(route.query.view))
 const downloadSource = ref<'github' | 'cloudflare'>('cloudflare')
 const mobileRelease = ref<StudioMobileRelease>(DEFAULT_MOBILE_RELEASE)
 const connections = ref<AppConnection[]>([])
@@ -54,12 +65,11 @@ const deletingConnectionId = ref<number | null>(null)
 const lanAuthorization = ref<LanAppAuthorizationResponse | null>(null)
 const cloudAuthorization = ref<CloudAppAuthorizationResponse | null>(null)
 const qrCodeDataUrls = ref<Record<'lan' | 'cloud', string>>({ lan: '', cloud: '' })
-type DownloadQrChannel = 'androidApk' | 'googlePlay' | 'apple' | 'harmony'
+type DownloadQrChannel = 'androidApk' | 'googlePlay' | 'apple'
 const downloadQrCodeDataUrls = ref<Record<DownloadQrChannel, string>>({
   androidApk: '',
   googlePlay: '',
   apple: '',
-  harmony: '',
 })
 const currentTimestamp = ref(Math.floor(Date.now() / 1000))
 let countdownTimer: ReturnType<typeof setInterval> | null = null
@@ -93,13 +103,9 @@ const appleDownloadUrl = computed(() => {
     ? channel.appStoreUrl
     : channel.testFlightUrl || channel.appStoreUrl
 })
-const harmonyDownloadUrl = computed(() => {
-  const channel = mobileRelease.value.channels.harmony
-  return channel.url
-})
 const appleReleaseLabel = computed(() => {
   const channel = mobileRelease.value.channels.apple
-  if (channel.testFlightUrl && channel.appStoreUrl) return 'TestFlight · App Store'
+  if (appleUsesOfficialRelease.value && channel.appStoreUrl) return 'App Store'
   if (channel.testFlightUrl) return 'TestFlight'
   if (channel.appStoreUrl) return 'App Store'
   return t('connections.app.iosPending')
@@ -417,12 +423,11 @@ async function generateDownloadQrCode(channel: DownloadQrChannel, requestedUrl: 
 function downloadUrlFor(channel: DownloadQrChannel): string {
   if (channel === 'androidApk') return androidDownloadUrl.value
   if (channel === 'googlePlay') return googlePlayDownloadUrl.value
-  if (channel === 'apple') return appleDownloadUrl.value
-  return harmonyDownloadUrl.value
+  return appleDownloadUrl.value
 }
 
 function generateDownloadQrCodes(): void {
-  const channels: DownloadQrChannel[] = ['androidApk', 'googlePlay', 'apple', 'harmony']
+  const channels: DownloadQrChannel[] = ['androidApk', 'googlePlay', 'apple']
   for (const channel of channels) void generateDownloadQrCode(channel, downloadUrlFor(channel))
 }
 
@@ -449,12 +454,29 @@ function openScanModal() {
   ensureCurrentAuthorization('lan')
 }
 
+function updatePanelView(view: AppPanelView): void {
+  panelView.value = view
+  void router.replace({
+    query: {
+      ...route.query,
+      view: view === 'download' ? undefined : view,
+    },
+  })
+}
+
+watch(
+  () => route.query.view,
+  value => {
+    panelView.value = normalizePanelView(value)
+  },
+)
+
 watch(connectionTab, (type) => {
   ensureCurrentAuthorization(type, type === 'cloud')
 })
 
 watch(
-  [androidDownloadUrl, googlePlayDownloadUrl, appleDownloadUrl, harmonyDownloadUrl],
+  [androidDownloadUrl, googlePlayDownloadUrl, appleDownloadUrl],
   generateDownloadQrCodes,
 )
 
@@ -492,7 +514,7 @@ onUnmounted(() => {
             class="view-switch-button"
             :class="{ 'view-switch-button--active': panelView === 'list' }"
             :aria-selected="panelView === 'list'"
-            @click="panelView = 'list'"
+            @click="updatePanelView('list')"
           >
             {{ t('connections.app.viewList') }}
           </button>
@@ -501,9 +523,18 @@ onUnmounted(() => {
             class="view-switch-button"
             :class="{ 'view-switch-button--active': panelView === 'download' }"
             :aria-selected="panelView === 'download'"
-            @click="panelView = 'download'"
+            @click="updatePanelView('download')"
           >
             {{ t('connections.app.viewDownload') }}
+          </button>
+          <button
+            type="button"
+            class="view-switch-button"
+            :class="{ 'view-switch-button--active': panelView === 'messages' }"
+            :aria-selected="panelView === 'messages'"
+            @click="updatePanelView('messages')"
+          >
+            {{ t('connections.app.viewMessages') }}
           </button>
         </div>
         <NButton size="small" type="primary" @click="openScanModal">
@@ -573,7 +604,7 @@ onUnmounted(() => {
       </div>
     </template>
 
-    <div v-else class="app-downloads">
+    <div v-else-if="panelView === 'download'" class="app-downloads">
       <div class="app-download-layout">
         <section class="app-download-hero">
           <div class="app-download-intro">
@@ -589,7 +620,7 @@ onUnmounted(() => {
             <p>{{ t('connections.app.downloadDescription') }}</p>
             <div class="app-download-meta">
               <span>{{ mobileVersionLabel }}</span>
-              <span>Android · iOS · HarmonyOS</span>
+              <span>Android · iOS</span>
             </div>
           </div>
 
@@ -743,44 +774,11 @@ onUnmounted(() => {
             <NButton v-else class="app-platform-action" disabled>{{ t('connections.app.notReleased') }}</NButton>
           </article>
 
-          <article
-            class="app-platform-card"
-            :class="harmonyDownloadUrl ? 'app-platform-card--available' : 'app-platform-card--pending'"
-          >
-            <div class="app-platform-card-header">
-              <div class="app-platform-icon" aria-hidden="true">
-                <svg data-platform-icon="harmony" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55">
-                  <circle cx="12" cy="12" r="8.5" />
-                  <path d="M7.5 14.5c1.4-3.8 7.6-3.8 9 0M9.2 9.5h.01M14.8 9.5h.01" />
-                </svg>
-              </div>
-              <NTag v-if="harmonyDownloadUrl && !mobileRelease.channels.harmony.online" class="download-test-status" size="small" type="warning" :bordered="false">
-                {{ t('connections.app.testVersion') }}
-              </NTag>
-              <div v-if="harmonyDownloadUrl" class="download-tag-qr">
-                <img v-if="downloadQrCodeDataUrls.harmony" :src="downloadQrCodeDataUrls.harmony" :alt="t('connections.app.downloadScan')">
-                <NSpin v-else size="small" />
-              </div>
-              <NTag v-else size="small" :bordered="false">{{ t('connections.app.notReleased') }}</NTag>
-            </div>
-            <div class="app-platform-copy">
-              <h4>HarmonyOS</h4>
-              <p>{{ mobileRelease.channels.harmony.online ? 'HarmonyOS' : t('connections.app.harmonyPending') }}</p>
-            </div>
-            <NButton
-              v-if="harmonyDownloadUrl"
-              class="app-platform-action"
-              tag="a"
-              type="primary"
-              :href="mobileRelease.channels.harmony.url"
-              target="_blank"
-              rel="noopener noreferrer"
-            >HarmonyOS</NButton>
-            <NButton v-else class="app-platform-action" disabled>{{ t('connections.app.notReleased') }}</NButton>
-          </article>
         </div>
       </div>
     </div>
+
+    <SocialMessagesView v-else embedded class="app-message-push" />
   </section>
 
   <NModal
@@ -1083,6 +1081,11 @@ onUnmounted(() => {
   background: linear-gradient(180deg, rgba(var(--accent-primary-rgb), 0.025), transparent 52%);
 }
 
+.app-message-push {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .app-download-layout {
   width: 100%;
   max-width: 1180px;
@@ -1216,7 +1219,7 @@ onUnmounted(() => {
 
 .app-platform-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 

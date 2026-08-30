@@ -6,16 +6,20 @@ const source = readFileSync(
   'utf8',
 )
 const controllerSource = readFileSync(
-  'packages/server/src/controllers/app-connections.ts',
+  'packages/server/src/modules/studio/controllers/app-connections.ts',
   'utf8',
 )
 
 describe('App connections scan modal', () => {
-  it('switches between the connection list and the mobile download hub', () => {
-    expect(source).toContain("const panelView = ref<'list' | 'download'>('download')")
+  it('switches between the connection list, mobile download hub, and message push', () => {
+    expect(source).toContain("type AppPanelView = 'list' | 'download' | 'messages'")
+    expect(source).toContain('normalizePanelView(route.query.view)')
     expect(source).toContain("t('connections.app.viewList')")
     expect(source).toContain("t('connections.app.viewDownload')")
+    expect(source).toContain("t('connections.app.viewMessages')")
     expect(source).toContain("panelView === 'list'")
+    expect(source).toContain("updatePanelView('messages')")
+    expect(source).toContain('<SocialMessagesView v-else embedded')
     expect(source).toContain('HStudio Mobile')
     expect(source).toContain("const downloadSource = ref<'github' | 'cloudflare'>('cloudflare')")
     expect(source).toContain('fetchStudioVersionManifest()')
@@ -24,10 +28,9 @@ describe('App connections scan modal', () => {
     expect(source).toContain('<div v-if="androidDownloadUrl" class="download-tag-qr">')
     expect(source).toContain('<div v-if="googlePlayDownloadUrl" class="download-tag-qr">')
     expect(source).toContain('<div v-if="appleDownloadUrl" class="download-tag-qr">')
-    expect(source).toContain('<div v-if="harmonyDownloadUrl" class="download-tag-qr">')
     expect(source).toContain('downloadQrCodeDataUrls.googlePlay')
     expect(source).toContain('downloadQrCodeDataUrls.apple')
-    expect(source).toContain('downloadQrCodeDataUrls.harmony')
+    expect(source).not.toContain('downloadQrCodeDataUrls.harmony')
     expect(source).toContain("t('connections.app.testVersion')")
     expect(source).toContain('class="download-test-status"')
     expect(source).toContain('&:only-child')
@@ -46,14 +49,17 @@ describe('App connections scan modal', () => {
     expect(source).toContain('<h4>Android APK</h4>\n              <p>Android</p>')
     expect(source).toContain('<h4>Google Play</h4>')
     expect(source).toContain('<h4>Apple</h4>')
-    expect(source).toContain('<h4>HarmonyOS</h4>')
-    expect(source.match(/class="app-platform-card(?:\s|\")/g)).toHaveLength(4)
+    expect(source).not.toContain('<h4>HarmonyOS</h4>')
+    expect(source).not.toContain('data-platform-icon="harmony"')
+    expect(source.match(/class="app-platform-card(?:\s|\")/g)).toHaveLength(3)
     expect(source).toContain('mobileRelease.channels.apple.testFlightUrl')
     expect(source).toContain('mobileRelease.channels.apple.appStoreUrl')
     expect(source).toContain('appleUsesOfficialRelease')
+    expect(source).toContain("if (appleUsesOfficialRelease.value && channel.appStoreUrl) return 'App Store'")
+    expect(source).not.toContain('TestFlight · App Store')
     expect(source).toContain(':type="appleUsesOfficialRelease ? \'default\' : \'primary\'"')
     expect(source).toContain('max-width: 1180px')
-    expect(source).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))')
+    expect(source).toContain('grid-template-columns: repeat(3, minmax(0, 1fr))')
     expect(source).toContain("t('connections.app.notReleased')")
   })
 
