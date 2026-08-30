@@ -1,6 +1,9 @@
 # scripts/ops — hermes-web-ui 服务器运维脚本
 
-针对生产机 `hs.xlingo.fun` 的 SQLite 损坏防护。**升级后需要重跑安装脚本**，原因见下。
+针对生产机 `hs.xlingo.fun` 的两类防护：SQLite 损坏，以及 runtime-versions 权限。
+**两个补丁升级后都会被冲掉，必须重跑安装脚本**，原因见下。
+
+脚本名字里只有 db-guard，但它管的是"升级后所有要重打的东西"。
 
 ## 快速用法
 
@@ -8,8 +11,11 @@
 # 每次 npm i -g hermes-web-ui 升级之后跑这个
 ./scripts/ops/install-db-guard.sh
 
-# 只重打 VACUUM 补丁（升级后最小动作）
+# 只重打两个补丁（升级后最小动作）
 ./scripts/ops/install-db-guard.sh --patch-only
+
+# ACL 补丁要重启才生效（会掐断在跑的会话，自己挑时机）
+ssh root@115.159.206.76 systemctl restart hermes-webui
 
 # 换机器
 DEPLOY_HOST=root@1.2.3.4 ./scripts/ops/install-db-guard.sh
@@ -24,6 +30,27 @@ hermes-db-guard ensure-patch             # 查/补 VACUUM 补丁
 journalctl -t hermes-db-guard -p err     # 只看告警
 journalctl -t hermes-webui-watchdog      # 看服务被拉起的记录
 ```
+
+## runtime-versions ACL 补丁（2026-08-30）
+
+升级到 0.7.1 后除 `admin` 以外的账号全都建不了 hermes 会话。链条：
+
+1. 0.7.1 的 `ChatPanel.confirmNewChat()` 新增了一次探测 `GET /api/hermes/runtime-versions`，用来判断 runtime 装没装。
+2. 那条路由是 `requireSuperAdmin`。普通 admin 拿到 403。
+3. 客户端的 `catch` 把任何失败都当成"runtime 没装"，把人推去 `hermes.agentManager`。
+4. 那个路由自己是 `meta.requiresSuperAdmin`，守卫又把人弹回 `hermes.chat`。
+5. 现象：点"新建会话"闪一下无权限提示，然后什么都没发生。7 个账号里 6 个中招。
+
+两边都修了：
+
+- **前端**（`ChatPanel.vue`，本仓库）：403/401 只说明"不许你读清单"，不携带"装没装"的信息，因此不再当作没装。只有探测真的报告没有 `agentVersion` 且没有选中 CLI 时才跳安装页。
+- **后端**（`patch-runtime-versions-acl.mjs`）：把只读的那条 GET 放到 `requireAdmin`。增删改（activate / download / delete / restart-webui）以及 `/jobs` 一律保持 `requireSuperAdmin`——脚本会校验这一点，一旦不成立就回滚。
+
+`packages/server/src/modules/hermes/routes/runtime-versions.ts` 里也改了同样一行，那是给上游和以后自建用的；服务器跑的是 npm 发布的产物，所以改源码到不了线上，才需要这个补丁。
+
+补丁不硬编码任何压缩后的标识符——`Se` / `gp` 这种名字每次上游构建都会变。两个守卫都靠各自的错误字符串定位，路由靠字面路径定位。幂等；改前备份；改完 `node --check`，语法错就从备份回滚。
+
+**⚠️ 要重启才生效**，而重启会掐断在跑的会话，所以安装脚本不替你重启。
 
 ## 事故背景（2026-08-27 → 08-29）
 
