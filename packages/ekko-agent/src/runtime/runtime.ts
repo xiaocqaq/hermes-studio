@@ -34,6 +34,7 @@ import type {
   AgentRuntimeBoundaryPhase,
   AgentRuntimeContextEstimate,
   AgentRuntimeOptions,
+  AgentRuntimeRecoveryDirective,
   AgentRuntimeRunInput,
   AgentRuntimeRunResult,
   AgentRuntimeStep,
@@ -144,12 +145,15 @@ export class AgentRuntime {
   private readonly toolsEnabled: boolean
   private readonly tools: AgentToolRegistry
   private readonly skillsEnabled: boolean
+  private readonly skillsAvailable?: () => boolean
   private readonly skills: AgentSkill[]
   private readonly skillDirectory?: string
   private readonly externalSkillDirectories: EkkoExternalSkillDirectory[]
   private readonly disabledSkillNames: string[]
   private readonly systemPrompt?: string
   private readonly runtimeInstructions: string[]
+  private readonly temporaryRuntimeInstructions?: () => string[]
+  private readonly recoveryDirective?: () => AgentRuntimeRecoveryDirective
   private readonly maxSteps: number
   private readonly toolContext?: AgentToolContext
   private readonly modelDefaults?: AgentRuntimeOptions['modelDefaults']
@@ -184,12 +188,15 @@ export class AgentRuntime {
       this.tools.setAuthorizer(options.toolAuthorizer)
     }
     this.skillsEnabled = options.skillsEnabled !== false
+    this.skillsAvailable = options.skillsAvailable
     this.skills = this.skillsEnabled ? options.skills ?? [] : []
     this.skillDirectory = String(options.skillDirectory || '').trim() || undefined
     this.externalSkillDirectories = options.externalSkillDirectories ?? []
     this.disabledSkillNames = options.disabledSkillNames ?? []
     this.systemPrompt = options.systemPrompt
     this.runtimeInstructions = options.runtimeInstructions ?? []
+    this.temporaryRuntimeInstructions = options.temporaryRuntimeInstructions
+    this.recoveryDirective = options.recoveryDirective
     this.maxSteps = options.maxSteps ?? DEFAULT_AGENT_MAX_STEPS
     this.toolContext = options.toolContext
     this.modelDefaults = options.modelDefaults
@@ -337,7 +344,7 @@ export class AgentRuntime {
       input.onEvent?.(event)
     }
 
-    const inputSkills = this.skillsEnabled ? input.skills ?? [] : []
+    const inputSkills = this.areSkillsAvailable() ? input.skills ?? [] : []
     this.registerSkillTools(inputSkills)
     const memoryIdentity = this.memoryIdentityFor(input)
     const memoryPreparation = await this.prepareMemory(input, memoryIdentity, runId)
@@ -415,6 +422,35 @@ export class AgentRuntime {
     }
 
     try {
+      const automaticRecoveryCalls = this.currentRecoveryDirective()?.automaticToolCalls ?? []
+      if (automaticRecoveryCalls.length) {
+        const toolCalls: AgentToolCall[] = automaticRecoveryCalls
+          .filter(call => this.tools.get(call.name))
+          .map(call => ({
+            id: `recovery-auto-${randomUUID()}`,
+            name: call.name,
+            arguments: call.arguments ?? {},
+          }))
+        if (toolCalls.length) {
+          const recoveryMessage: AgentOutputMessage = { role: 'assistant', content: '', toolCalls }
+          messages.push(recoveryMessage)
+          steps.push({ type: 'model', step: 0, message: recoveryMessage })
+          for (const segment of this.planToolCallSegments(toolCalls)) {
+            const executedCalls = await this.executeToolCallSegment(
+              runId,
+              0,
+              segment,
+              executionToolContext,
+              emit,
+              input.signal,
+            )
+            for (const { toolCall, result } of executedCalls) {
+              messages.push(createToolResultMessage(toolCall.id, result.content, toolCall.name, result.contentParts))
+              steps.push({ type: 'tool', step: 0, toolCallId: toolCall.id, toolName: toolCall.name, result })
+            }
+          }
+        }
+      }
       const matchedSkills = reconcileMatchedSkillContext(messages, skillRouting.matches)
       if (matchedSkills.length) {
         const toolCalls: AgentToolCall[] = matchedSkills.map(skill => ({
@@ -470,6 +506,15 @@ export class AgentRuntime {
             request.toolChoice = 'required'
           }
         }
+        const recoveryDirective = this.currentRecoveryDirective()
+        if (recoveryDirective?.active && request.tools?.length) {
+          const allowed = new Set(recoveryDirective.allowedToolNames)
+          const recoveryTools = request.tools.filter(tool => allowed.has(tool.name))
+          if (recoveryTools.length) {
+            request.tools = recoveryTools
+            request.toolChoice = 'required'
+          }
+        }
         contextEstimate = estimateModelRequestContext(request)
         emit({ type: 'context.estimated', runId, step, estimate: contextEstimate })
         const modelResult = await this.createModelResponseWithRetries(
@@ -485,6 +530,7 @@ export class AgentRuntime {
         const response = modelResult.response
         const assistantMessage = modelResponseToAgentMessage(response)
         const toolCalls = assistantMessage.toolCalls ?? []
+        const blockedByRecovery = toolCalls.length === 0 && this.currentRecoveryDirective()?.active === true
         if (activeBoundaryRun && toolCalls.length > 0) {
           activeBoundaryRun.phase = 'tool_batch'
         }
@@ -499,10 +545,18 @@ export class AgentRuntime {
           if (contextKey) this.modelContexts.set(contextKey, assistantMessage.context)
           emit({ type: 'model.context', runId, step, context: assistantMessage.context })
         }
-        emit({ type: 'model.message', runId, step, message: assistantMessage })
+        if (!blockedByRecovery) emit({ type: 'model.message', runId, step, message: assistantMessage })
 
         if (activeBoundaryRun?.pending && toolCalls.length === 0) {
           return completeBoundaryInterrupt(step)
+        }
+        if (blockedByRecovery) {
+          const directive = this.currentRecoveryDirective()
+          messages.push(createSystemMessage(
+            directive?.reminder ||
+            'Ekko recovery remains incomplete. Continue using recovery tools and do not ask the user whether to run a safe retry.',
+          ))
+          continue
         }
         if (toolCalls.length === 0) {
           const context = contextKey ? this.modelContexts.get(contextKey) : assistantMessage.context
@@ -768,14 +822,14 @@ export class AgentRuntime {
     const toolContext = this.mergedToolContext(input)
     const systemPrompt = buildSystemPrompt({
       basePrompt: input.systemPrompt ?? this.systemPrompt,
-      runtimeInstructions: this.runtimeInstructions,
+      runtimeInstructions: this.currentRuntimeInstructions(),
       userSystemMessages,
       memoryContext,
       clarificationEnabled: this.toolsEnabled && !!this.tools.get('clarify'),
-      skillDiscoveryEnabled: this.toolsEnabled && this.skillsEnabled &&
+      skillDiscoveryEnabled: this.toolsEnabled && this.areSkillsAvailable() &&
         !!this.tools.get('skill_list') &&
         !!this.tools.get('skill_view'),
-      skillManagementEnabled: this.toolsEnabled && this.skillsEnabled && !!this.tools.get('skill_manage'),
+      skillManagementEnabled: this.toolsEnabled && this.areSkillsAvailable() && !!this.tools.get('skill_manage'),
       skillNames,
       context: {
         provider: modelClient.provider,
@@ -792,10 +846,34 @@ export class AgentRuntime {
     ]
   }
 
+  private currentRuntimeInstructions(): string[] {
+    if (!this.temporaryRuntimeInstructions) return this.runtimeInstructions
+    try {
+      return [
+        ...this.runtimeInstructions,
+        ...this.temporaryRuntimeInstructions().map(value => String(value || '').trim()).filter(Boolean),
+      ]
+    } catch (error) {
+      return [
+        ...this.runtimeInstructions,
+        `Ekko temporary diagnostics could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+      ]
+    }
+  }
+
+  private currentRecoveryDirective(): AgentRuntimeRecoveryDirective | undefined {
+    if (!this.recoveryDirective) return undefined
+    try {
+      return this.recoveryDirective()
+    } catch {
+      return undefined
+    }
+  }
+
   private async skillRouting(input: AgentRuntimeRunInput): Promise<SkillRoutingResolution> {
     if (
       !this.toolsEnabled ||
-      !this.skillsEnabled ||
+      !this.areSkillsAvailable() ||
       !this.skillDirectory ||
       !this.tools.get('skill_view')
     ) return { names: [], matches: [] }
@@ -907,7 +985,7 @@ export class AgentRuntime {
   }
 
   private recordSkillToolCall(contextKey: string | undefined, toolName: string): void {
-    if (!this.skillReview || this.skillReviewEveryToolCalls <= 0) return
+    if (!this.areSkillsAvailable() || !this.skillReview || this.skillReviewEveryToolCalls <= 0) return
     const key = contextKey || '__default__'
     if (toolName === 'skill_manage') {
       this.skillToolCallCounts.delete(key)
@@ -931,6 +1009,7 @@ export class AgentRuntime {
   ): void {
     if (
       input.skillReviewEnabled === false ||
+      !this.areSkillsAvailable() ||
       (input.toolContext?.delegationDepth ?? this.toolContext?.delegationDepth ?? 0) > 0 ||
       !this.skillReview ||
       this.skillReviewEveryToolCalls <= 0 ||
@@ -1130,7 +1209,7 @@ export class AgentRuntime {
     try {
       throwIfAborted(signal)
       const skillChangeProbe = toolCall.name === 'terminal_exec' && this.skillDirectory
-        ? createDirectoryChangeProbe(this.skillDirectory)
+        ? await createDirectoryChangeProbe(this.skillDirectory)
         : undefined
       let skillDirectoryChanged = false
       let rawResult: AgentToolResult
@@ -1483,6 +1562,15 @@ export class AgentRuntime {
       }
     }
   }
+
+  private areSkillsAvailable(): boolean {
+    if (!this.skillsEnabled) return false
+    try {
+      return this.skillsAvailable?.() !== false
+    } catch {
+      return false
+    }
+  }
 }
 
 function reconcileMatchedSkillContext(
@@ -1636,7 +1724,8 @@ interface DirectoryChangeProbe {
   stop(): Promise<boolean>
 }
 
-function createDirectoryChangeProbe(directory: string): DirectoryChangeProbe | undefined {
+async function createDirectoryChangeProbe(directory: string): Promise<DirectoryChangeProbe | undefined> {
+  const before = await localSkillValidationSignature(directory)
   let changed = false
   let watcher: FSWatcher
   try {
@@ -1656,8 +1745,24 @@ function createDirectoryChangeProbe(directory: string): DirectoryChangeProbe | u
       // watcher before deciding whether validation is necessary.
       await new Promise<void>(resolveStop => setImmediate(resolveStop))
       watcher.close()
-      return changed
+      if (changed) return true
+      const after = await localSkillValidationSignature(directory)
+      return before !== undefined && after !== undefined && before !== after
     },
+  }
+}
+
+async function localSkillValidationSignature(directory: string): Promise<string | undefined> {
+  try {
+    const issues = await inspectLocalSkillValidationIssues(directory)
+    return JSON.stringify(issues.map(issue => ({
+      directory: issue.directory,
+      status: issue.status,
+      sha256: issue.sha256,
+      error: issue.error,
+    })))
+  } catch {
+    return undefined
   }
 }
 

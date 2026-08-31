@@ -9,6 +9,13 @@ export interface ActiveVersionManifest {
   pendingRuntimeRootDirectory?: string
   runtimeMigrationError?: string
   runtimeActivationError?: string
+  runtimeValidationFailures?: Array<{
+    version: string
+    platform: string
+    directory: string
+    reason: string
+    failedAt: string
+  }>
   webUiDirectory?: string
   platform?: string
   updatedAt?: string
@@ -68,6 +75,10 @@ export interface RuntimeVersionStatus {
     activeVersion: string
     agentVersion: string
     activeDirectory: string
+    pythonPath: string
+    agentRoot: string
+    source?: 'user-cli' | 'managed-runtime' | 'none'
+    dataDirectory: string
     storageDirectory: string
     defaultStorageDirectory: string
     pendingStorageDirectory: string

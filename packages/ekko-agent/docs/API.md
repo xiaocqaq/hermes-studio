@@ -51,7 +51,7 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 - 调用 `config.ensureDefaults()`，解析、迁移并验证完整配置。
 - Profile 名必须能安全映射为单个目录名，不能包含路径穿越或非法字符。
 - skill、log、workspace 路径必须位于各自的 `.ekko` 受管根目录内。
-- 三个路径必须已经存在且确实是目录。
+- log、workspace 路径必须已经存在且确实是目录。skill 路径只校验受管边界；Skill 初始化失败时 Profile 仍可创建，runtime 会禁用 Skill 路由并保留 Core 与恢复工具。
 - `layout.profile` 必须与 Agent 的 `profile` 一致。
 
 检查结果位于 `profileAgent.validation`。任一检查失败时，Agent 不会进入 `ekko.agent` 实例表。
@@ -66,6 +66,7 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 | `profiles` | `string[]?` | 额外创建的命名 Profile；`default` 总会创建。省略时仍会从已有 Profile 目录自动发现。 |
 | `config` | `EkkoConfigPatch?` | 在创建 Profile Agent 和 runtime 服务前合并并持久化的安装级配置；支持下表全部配置段的局部字段。 |
 | `hermesRootDirectory` | `string?` | 仅用于一次性识别并删除 `.ekko` 中旧版同步留下的 Hermes Skill 副本；Hermes 源目录只读且永不修改。 |
+| `onSkillError` | `(error: unknown) => void?` | 可选启动诊断回调；Ekko Setup 会记录故障并以无 Skills 的降级模式继续。 |
 | `env` | `Record<string, string \| undefined>?` | 路径和开发/生产数据库策略使用的环境变量。 |
 | `packageRoot` | `string?` | 开发模式下包内 `.ekko` 数据目录所在的包根目录。 |
 | `authorizationRefresher` | `EkkoModelAuthorizationRefresher?` | Provider-aware OAuth 刷新回调。 |
@@ -83,8 +84,10 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 | `<profile>` | `EkkoProfileAgent` | 无字段冲突时创建的运行时动态快捷属性，例如 `ekko.work`。 |
 | `directories` | `EkkoDirectoryManager` | 安装级目录创建与路径解析。 |
 | `layout` | `EkkoDirectoryLayout` | 安装级 base/root/config/database/skills/logs/workspace 绝对路径。 |
+| `diagnostics` | `EkkoDiagnosticsRegistry` | 不依赖数据库或 Skills 的进程内活动故障与审计注册表。 |
+| `recovery` | `EkkoRecoveryService` | Skills/数据库的确定性诊断、修复、自检与临时上下文服务。 |
 | `config` | `EkkoConfigStore` | 全局配置及模型、授权 CRUD。 |
-| `database` | `EkkoDatabaseManager` | 共享 SQLite 连接、迁移与事务。 |
+| `database` | `EkkoDatabaseManager` | 当前共享 SQLite 连接、迁移与事务；持久库不可用时其路径为 `:memory:`，目标持久路径仍位于 `layout.databasePath`。 |
 | `memoryStore` | `SqliteMemoryStore` | 未绑定 Profile 的底层 memory store。 |
 | `memory` | `MemoryService` | 兼容入口；调用者必须显式传 `profileId`。新代码用 `ekko.<profile>.memory`。 |
 | `conversations`, `conversation` | `EkkoConversationStore` | 兼容入口；不自动隔离 Profile。新代码用 Profile 模块。 |
@@ -107,6 +110,8 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 | `createModelClient(input?, clientOptions?)` | Provider 选择和 fetch 选项 | `ModelClient` | 创建模型客户端；OAuth Provider 会自动包裹刷新逻辑。 |
 | `createRuntime(options?)` | `CreateEkkoRuntimeOptions` | `AgentRuntime` | 兼容的安装级 runtime 工厂。 |
 | `close()` | 无 | `void` | 幂等关闭监听、memory 与数据库；Profile Agent 不单独关闭共享资源。 |
+
+持久数据库修复并通过自检后，当前 Setup 仍保持临时内存库直到本轮结束，避免在一次 run 中混用新旧连接。Hermes Studio 会在所有活动 run 与后台任务结束后自动关闭该 Setup，下一次 run 自动重建并连接已修复的持久数据库；故障期间写入临时库的数据不迁移。独立宿主需要在同一边界自行重建 Setup。`restartRequired` 表示“当前 Setup 需要被宿主重载”，在 Studio 中不要求用户手动重启应用。
 
 根容器还保留配置/模型兼容转发方法：`readConfig`、`updateConfig`、`replaceConfig`、`resetConfig`；`list/get/set/update/deleteModelProviderPreset`、`installModelProviderPreset`；`list/get/set/update/deleteModelProvider`、`setDefaultModel`；`list/get/set/update/deleteModelAuthorization`、`modelAuthorizationNeedsRefresh`、`refreshModelAuthorization`、`resolveModelAuthorization`。参数和返回值与下文对应的 `config`、`model`、`authorization` 方法相同。
 
@@ -170,6 +175,8 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 
 `AgentTool` 字段：`definition.name` 是唯一工具名，`definition.description?` 是模型说明，`definition.parameters?` 是 JSON Schema；`concurrency?` 默认为 `serial`，只有不共享可变状态且允许同批并发的工具才应设为 `parallel`；`execute(input, context?)` 返回 `{ ok, content, contentParts?, data?, error? }`。`AgentToolProvider` 字段为 `id`，并实现 `listTools(context?)`。Ekko runtime 将连续的 `parallel` 调用以最多 8 路并发执行，并把结果按原 tool-call 顺序回放；未标记工具仍是串行屏障。
 
+默认 registry 在由 `EkkoAgentSetup` 创建时还包含五个不依赖 Skill/持久数据库的恢复工具：`ekko_diagnostics`、`ekko_database_schema`、`ekko_repair_skills`、`ekko_repair_database`、`ekko_self_check`。Skills 修复使用打包源和 Ekko 所有权 manifest，不覆盖用户改过的同名 Skill；数据库 `retry` 原地运行代码 migrations，`rebuild` 必须显式 `confirmed=true`，并在重建前隔离原数据库族。每个修复内部都会执行目标自检，只有当前 incident revision 的自检通过后才清除活动故障。
+
 ## Profile `skill` 模块
 
 | 方法 | 参数 | 返回/说明 |
@@ -202,7 +209,9 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 | `modelClient?` | 完全自定义 ModelClient；提供后不再按配置创建。 |
 | `toolsEnabled?`, `tools?`, `toolAuthorizer?`, `toolContext?` | 工具总开关、自定义 registry、审批器与默认上下文。 |
 | `skillsEnabled?`, `skills?`, `skillDirectory?`, `skillReviewEveryToolCalls?` | Skill 总开关、进程内 skills、目录覆盖和复盘频率。 |
-| `systemPrompt?`, `runtimeInstructions?` | 系统提示覆盖与附加指令。 |
+| `skillsAvailable?` | 每轮求值的动态 Skill 能力探针；故障修复后同一 runtime 可恢复发现与路由。 |
+| `systemPrompt?`, `runtimeInstructions?` | 系统提示覆盖与固定附加指令。 |
+| `temporaryRuntimeInstructions?` | 每轮重新求值的临时指令 Provider；用于进程诊断，不写入 memory。 |
 | `maxSteps?`, `maxModelRetries?`, `maxConsecutiveToolFailures?` | 主循环、模型重试和连续工具失败上限。 |
 | `backgroundDelegationEnabled?`, `subtaskMaxSteps?` | 后台委派开关和子任务步数。 |
 | `modelDefaults?` | 除 messages/tools/stream 外的默认模型请求字段。 |
@@ -470,7 +479,7 @@ export class EkkoProfileDirectoryManager {
   readonly skillDirectory: string
   readonly logDirectory: string
   readonly workspaceDirectory: string
-  constructor(readonly profile: string, private readonly directories: EkkoDirectoryManager)
+  constructor(readonly profile: string, private readonly directories: EkkoDirectoryManager, layout?: EkkoProfileDirectoryLayout)
   sessionWorkspaceDirectory(sessionId: string): string
 }
 
@@ -586,6 +595,7 @@ export interface EkkoProfileAgentOptions {
   skills: EkkoSkillManager
   toolApprovals: () => EkkoToolApprovalService
   createRuntime: (options?: CreateEkkoRuntimeOptions) => AgentRuntime
+  onLogError?: (error: unknown) => void
 }
 
 export interface EkkoProfileAgentValidation {
@@ -1098,6 +1108,80 @@ export class EkkoDatabaseManager {
   close(): void
 }
 ```
+### `src/diagnostics.ts`
+
+```ts
+export type EkkoCapability = 'skills' | 'database' | 'memory' | 'logs'
+
+export type EkkoDiagnosticScope = 'global' | `profile:${string}`
+
+export type EkkoDiagnosticStatus = 'active' | 'resolved'
+
+export interface EkkoRecoveryPlan {
+  tool: string
+  summary: string
+  steps: string[]
+  automatic: boolean
+  requiresConfirmation?: boolean
+  source?: string
+  target?: string
+  schemaOwner?: string
+  schema?: Record<string, string[]>
+}
+
+export interface EkkoDiagnosticInput {
+  component: EkkoCapability
+  scope?: EkkoDiagnosticScope
+  operation: string
+  error: unknown
+  effect: string
+  recovery: EkkoRecoveryPlan
+  metadata?: Record<string, unknown>
+}
+
+export interface EkkoDiagnosticIncident {
+  incidentId: string
+  revision: number
+  component: EkkoCapability
+  scope: EkkoDiagnosticScope
+  operation: string
+  code: string
+  message: string
+  effect: string
+  recovery: EkkoRecoveryPlan
+  metadata?: Record<string, unknown>
+  status: EkkoDiagnosticStatus
+  firstSeenAt: string
+  lastSeenAt: string
+  resolvedAt?: string
+  selfCheck?: EkkoSelfCheckResult
+}
+
+export interface EkkoSelfCheckResult {
+  ok: boolean
+  component: EkkoCapability | 'all'
+  checkedAt: string
+  checks: Array<{ name: string ok: boolean detail: string }>
+  metadata?: Record<string, unknown>
+}
+
+export interface EkkoDiagnosticsSnapshot {
+  coreAvailable: true
+  status: 'ok' | 'degraded'
+  active: EkkoDiagnosticIncident[]
+  recent: EkkoDiagnosticIncident[]
+}
+
+export class EkkoDiagnosticsRegistry {
+  report(input: EkkoDiagnosticInput): EkkoDiagnosticIncident
+  resolve(component: EkkoCapability, scope: EkkoDiagnosticScope, selfCheck: EkkoSelfCheckResult, incidentId?: string): boolean
+  get(component: EkkoCapability, scope: EkkoDiagnosticScope = 'global'): EkkoDiagnosticIncident | undefined
+  snapshot(): EkkoDiagnosticsSnapshot
+  temporaryContext(profile = 'default'): string | undefined
+}
+
+export function profileScope(profile: string): EkkoDiagnosticScope
+```
 ### `src/directories.ts`
 
 ```ts
@@ -1114,6 +1198,17 @@ export interface EkkoDirectoryLayout {
 
 export interface EkkoDirectoryInitializationOptions {
   hermesRootDirectory?: string
+  onSkillError?: (error: unknown) => void
+}
+
+export interface EkkoSkillDirectoryCheck {
+  ok: boolean
+  sourceDirectory?: string
+  targetDirectory: string
+  bundledSkillCount: number
+  missing: string[]
+  unreadable: string[]
+  detail: string
 }
 
 export class EkkoDirectoryManager {
@@ -1129,6 +1224,10 @@ export class EkkoDirectoryManager {
   initialize(options: EkkoDirectoryInitializationOptions = {}): EkkoDirectoryLayout
   initializeConfigDirectory(): string
   profileSkillsDirectory(profile = 'default'): string
+  profileSkillsPath(profile = 'default'): string
+  bundledSkillsSourceDirectory(): string | undefined
+  synchronizeProfileSkills(profile = 'default'): string
+  checkProfileSkills(profile = 'default'): EkkoSkillDirectoryCheck
   profileLogsDirectory(profile = 'default'): string
   profileLogsPath(profile = 'default'): string
   profileWorkspaceDirectory(profile = 'default'): string
@@ -1183,6 +1282,10 @@ export * from './config'
 export * from './config-store'
 
 export * from './directories'
+
+export * from './diagnostics'
+
+export * from './recovery'
 
 export * from './setup'
 
@@ -1250,6 +1353,8 @@ export * from './tools/manager'
 
 export * from './tools/registry'
 
+export * from './tools/recovery'
+
 export * from './tools/skills'
 
 export * from './tools/terminal'
@@ -1292,6 +1397,7 @@ export interface EkkoFileLoggerOptions {
   directory: string
   maxBytes?: number
   now?: () => Date
+  onError?: (error: unknown) => void
 }
 
 export interface EkkoFileLogReaderOptions {
@@ -1480,6 +1586,8 @@ export interface MemoryServiceOptions {
   store?: MemoryStore
   enabled?: boolean
   warning?: string
+  storageMode?: 'persistent' | 'ephemeral'
+  onWarning?: (error: unknown) => void
   recentMessageLimit?: number
   automaticRecallTokenBudget?: number
   searchResultLimit?: number
@@ -1498,6 +1606,7 @@ export class MemoryService {
   constructor(options: MemoryServiceOptions = {})
   configure(options: Pick< MemoryServiceOptions, | 'enabled' | 'recentMessageLimit' | 'automaticRecallTokenBudget' | 'searchResultLimit' >): void
   get isEnabled(): boolean
+  get toolUnavailableReason(): string | undefined
   async captureMessages(identity: MemoryRuntimeIdentity, messages: MemoryCaptureMessage[]): Promise<string[]>
   async retrieve(identity: MemoryRuntimeIdentity, queryText?: string, overrides: Partial<MemoryQuery> = {}): Promise<MemoryContext>
   async search(identity: MemoryRuntimeIdentity, query: MemoryQuery): Promise<MemoryQueryResult>
@@ -2341,6 +2450,46 @@ export interface ModelClientOptions {
   fetch?: FetchLike
 }
 ```
+### `src/recovery.ts`
+
+```ts
+export const EKKO_RECOVERABLE_DATABASE_TABLES = [ 'memory_messages', 'memory_nodes', 'memory_audit_events', 'memory_embeddings', 'sessions', 'messages', ] as const
+
+export const EKKO_DATABASE_SCHEMA_BLUEPRINT = { owner: 'ekko-agent compiled migrations (memory@8, conversations@1)', rule: 'Create or upgrade the database only by running Ekko migrations; never hand-write repair SQL.', tables: { schema_migrations: ['component', 'version', 'applied_at'], memory_messages: ['row_id', 'id', 'session_id', 'parent_id', 'role', 'content', 'metadata_json', 'created_at'], memory_nodes: [ 'row_id', 'id', 'parent_id', 'supersedes_id', 'profile_id', 'scope_type', 'scope_namespace', 'scope_id', 'origin_json', 'domain', 'category_path_json', 'category_path_text', 'type', 'key', 'revision', 'value_json', 'title', 'content', 'status', 'confidence', 'importance', 'tags_json', 'entities_json', 'source_message_ids_json', 'created_at', 'updated_at', 'expires_at', ], memory_audit_events: [ 'row_id', 'id', 'event_type', 'node_id', 'session_id', 'profile_id', 'actor', 'reason', 'payload_json', 'created_at', ], memory_embeddings: ['node_id', 'model', 'embedding', 'created_at'], sessions: [ 'id', 'profile', 'source', 'agent', 'agent_mode', 'agent_session_id', 'agent_native_session_id', 'user_id', 'model', 'provider', 'api_mode', 'title', 'parent_session_id', 'fork_point_message_id', 'started_at', 'ended_at', 'end_reason', 'message_count', 'tool_call_count', 'input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens', 'reasoning_tokens', 'billing_provider', 'estimated_cost_usd', 'actual_cost_usd', 'cost_status', 'preview', 'last_active', 'is_archived', 'workspace', 'category_id', 'history_revision', ], messages: [ 'id', 'session_id', 'role', 'content', 'display_role', 'display_content', 'tool_call_id', 'tool_calls', 'tool_name', 'timestamp', 'token_count', 'finish_reason', 'reasoning', 'reasoning_details', 'reasoning_content', ], }, } as const
+
+export type EkkoDatabaseRecoveryStrategy = 'retry' | 'rebuild'
+
+export type EkkoSelfCheckComponent = 'all' | 'skills' | 'database' | 'memory' | 'logs'
+
+export interface EkkoRecoveryServiceOptions {
+  diagnostics: EkkoDiagnosticsRegistry
+  directories: EkkoDirectoryManager
+  databasePath: string
+  env?: Record<string, string | undefined>
+}
+
+export interface EkkoRecoverySnapshot extends EkkoDiagnosticsSnapshot {
+  capabilities: { skills: { sourceDirectory?: string; rootDirectory: string } database: { targetPath: string activeStorage: 'persistent' | 'ephemeral' targetReady: boolean restartRequired: boolean schemaOwner: string } }
+}
+
+export class EkkoRecoveryService {
+  constructor(private readonly options: EkkoRecoveryServiceOptions)
+  recordSkillsFailure(profile: string | undefined, operation: string, error: unknown): EkkoDiagnosticIncident
+  recordDatabaseFailure(operation: string, error: unknown): EkkoDiagnosticIncident
+  recordMemoryFailure(operation: string, error: unknown): EkkoDiagnosticIncident
+  recordLogsFailure(profile: string | undefined, operation: string, error: unknown): EkkoDiagnosticIncident
+  configureMemorySelfCheck(check: () => { ok: boolean; detail: string }): void
+  snapshot(): EkkoRecoverySnapshot
+  temporaryContext(profile = 'default'): string | undefined
+  runtimeDirective(profile = 'default'): AgentRuntimeRecoveryDirective
+  databaseSchema()
+  selfCheck(component: EkkoSelfCheckComponent, profile = 'default'): EkkoSelfCheckResult
+  selfCheckAndResolve(component: EkkoSelfCheckComponent, profile = 'default'): EkkoSelfCheckResult
+  repairSkills(profile = 'default'): { ok: boolean sourceDirectory?: string targetDirectory: string selfCheck: EkkoSelfCheckResult }
+  repairLogs(profile = 'default'): { ok: boolean targetDirectory: string selfCheck: EkkoSelfCheckResult error?: string }
+  repairDatabase(strategy: EkkoDatabaseRecoveryStrategy, confirmed = false): { ok: boolean strategy: EkkoDatabaseRecoveryStrategy backupPath?: string recoveredTables?: Array<{ table: string; rows: number }> skippedTables?: Array<{ table: string; reason: string }> restartRequired: boolean selfCheck: EkkoSelfCheckResult error?: string }
+}
+```
 ### `src/runtime/events.ts`
 
 ```ts
@@ -2386,12 +2535,12 @@ export interface SystemPromptInput {
   skillDiscoveryEnabled?: boolean
   skillManagementEnabled?: boolean
   skillNames?: string[]
-  context?: { provider?: string model?: string profile?: string cwd?: string workspaceRoot?: string }
+  context?: { provider?: string model?: string profile?: string cwd?: string workspaceRoot?: string platform?: NodeJS.Platform arch?: string }
 }
 
 export const EKKO_OUTPUT_FORMAT_GUIDELINES = `## Image and File Output When returning an image, video, or file to the user, use Markdown with an existing local absolute path. - Unix/macOS/WSL image: \`![description](/absolute/path/image.png)\` - Windows image: \`![description](<C:/absolute/path/image.png>)\` - Unix/macOS/WSL file: \`[filename](/absolute/path/file.pdf)\` - Windows file: \`[filename](<C:/absolute/path/file.pdf>)\` - Use forward slashes for Windows paths. - Wrap paths containing spaces, non-ASCII characters, or special characters in angle brackets. - Do not use relative paths or \`file://\` URLs. - Verify that the referenced file exists before returning it.`
 
-export const EKKO_TOOL_EXECUTION_GUIDELINES = `## Tool Execution Treat external commands, language packages, and other prerequisites named by a Skill as requirements, not proof that they are installed. - Before relying on an external dependency whose availability has not already been established, perform a lightweight availability check. - Do not run the primary dependency-based approach merely to discover whether its dependency exists. - Request independent tool calls together in one response. The runtime executes tools marked as parallel-safe concurrently while preserving serial barriers for stateful or dependent work. - When the user asks to execute or evaluate Node.js, JavaScript, or Python source code, use code_exec, including for one-line snippets. Do not probe Node or Python with terminal_exec first; code_exec resolves its runtime. - Use terminal_exec for CLI commands, project scripts, tests, builds, package managers, and other executables. - terminal_exec may use explicit absolute system paths and package-manager forms such as npx --dir. This capability is not limited to workspace files. - By default, keep downloads, clones, archives, extracted repositories, and generated intermediates inside the current workspace. Prefer the workspace's .ekko-tmp directory for disposable files so workspace-scoped file and image tools can inspect them. Use a system or external path only when the user or task explicitly requires it. - Dangerous tool calls may pause for runtime authorization. If authorization is denied, do not retry the operation through another tool or language runtime unless the user explicitly changes that decision. - After terminal_exec reports a [skill_validation] issue, do not claim the Skill installation is complete. Call skill_view for each writable local Skill and repair it with skill_manage until its frontmatter passes validation. Do not mutate read-only external Skill directories. - If a dependency is unavailable, prefer a compatible installed or built-in alternative. Install it only when installation is necessary and appropriate for the user's task. - Verify created artifacts before returning them.`
+export const EKKO_TOOL_EXECUTION_GUIDELINES = `## Tool Execution Treat external commands, language packages, and other prerequisites named by a Skill as requirements, not proof that they are installed. - Before relying on an external dependency whose availability has not already been established, perform a lightweight availability check. - Do not run the primary dependency-based approach merely to discover whether its dependency exists. - Request independent tool calls together in one response. The runtime executes tools marked as parallel-safe concurrently while preserving serial barriers for stateful or dependent work. - When the user asks to execute or evaluate Node.js, JavaScript, or Python source code, use code_exec, including for one-line snippets. Do not probe Node or Python with terminal_exec first; code_exec resolves its runtime. - Use terminal_exec for CLI commands, project scripts, tests, builds, package managers, and other executables. - terminal_exec may use explicit absolute system paths and platform-appropriate package-manager forms. Follow the Command Environment section below; this capability is not limited to workspace files. - By default, keep downloads, clones, archives, extracted repositories, and generated intermediates inside the current workspace. Prefer the workspace's .ekko-tmp directory for disposable files so workspace-scoped file and image tools can inspect them. Use a system or external path only when the user or task explicitly requires it. - Dangerous tool calls may pause for runtime authorization. If authorization is denied, do not retry the operation through another tool or language runtime unless the user explicitly changes that decision. - After terminal_exec reports a [skill_validation] issue, do not claim the Skill installation is complete. Call skill_view for each writable local Skill and repair it with skill_manage until its frontmatter passes validation. Do not mutate read-only external Skill directories. - If a dependency is unavailable, prefer a compatible installed or built-in alternative. Install it only when installation is necessary and appropriate for the user's task. - Verify created artifacts before returning them.`
 
 export const EKKO_CLARIFICATION_GUIDELINES = `## User Clarification When missing user input materially blocks or changes the task, call the clarify tool and wait for the response. - Do not present a blocking clarification question as an ordinary assistant response. - Ask one concise question that collects the necessary information; provide choices only for a short fixed set of answers. - Do not call clarify when a safe, reasonable assumption lets you continue without materially changing the outcome.`
 
@@ -2420,6 +2569,18 @@ export interface EkkoBackgroundContinuationContext {
   memoryPolicy: 'disabled'
 }
 
+export interface AgentRuntimeRecoveryToolCall {
+  name: string
+  arguments?: Record<string, unknown>
+}
+
+export interface AgentRuntimeRecoveryDirective {
+  active: boolean
+  automaticToolCalls: AgentRuntimeRecoveryToolCall[]
+  allowedToolNames: string[]
+  reminder: string
+}
+
 export interface AgentRuntimeOptions {
   profileId?: string
   modelClient?: ModelClient
@@ -2427,6 +2588,7 @@ export interface AgentRuntimeOptions {
   tools?: AgentToolRegistry
   toolAuthorizer?: AgentToolAuthorizer
   skillsEnabled?: boolean
+  skillsAvailable?: () => boolean
   skills?: AgentSkill[]
   skillDirectory?: string
   externalSkillDirectories?: EkkoExternalSkillDirectory[]
@@ -2434,6 +2596,8 @@ export interface AgentRuntimeOptions {
   skillReviewEveryToolCalls?: number
   systemPrompt?: string
   runtimeInstructions?: string[]
+  temporaryRuntimeInstructions?: () => string[]
+  recoveryDirective?: () => AgentRuntimeRecoveryDirective
   maxSteps?: number
   maxModelRetries?: number
   maxConsecutiveToolFailures?: number
@@ -2531,6 +2695,8 @@ export interface CreateEkkoRuntimeOptions extends Omit<AgentRuntimeOptions, 'mem
 export class EkkoAgentSetup {
   readonly directories: EkkoDirectoryManager
   readonly layout: EkkoDirectoryLayout
+  readonly diagnostics: EkkoDiagnosticsRegistry
+  readonly recovery: EkkoRecoveryService
   readonly config: EkkoConfigStore
   readonly database: EkkoDatabaseManager
   readonly memoryStore: SqliteMemoryStore
@@ -2817,9 +2983,13 @@ export function createDelegationTools(): AgentTool[]
 ### `src/tools/files.ts`
 
 ```ts
+export const DEFAULT_READ_FILE_MAX_BYTES = 50_000
+
 export interface ReadFileInput extends Record<string, unknown> {
   path: string
   encoding?: BufferEncoding
+  offset?: number
+  limit?: number
 }
 
 export interface WriteFileInput extends Record<string, unknown> {
@@ -2831,7 +3001,7 @@ export interface WriteFileInput extends Record<string, unknown> {
 
 export class ReadFileTool implements AgentTool<ReadFileInput> {
   readonly concurrency = 'parallel' as const
-  readonly definition = { name: 'read_file', description: 'Read a UTF-8 text file from the workspace.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path relative to the current workspace.' }, encoding: { type: 'string', description: 'Text encoding. Defaults to utf8.' }, }, required: ['path'], additionalProperties: false, }, }
+  readonly definition = { name: 'read_file', description: `Read a text file from the workspace, reading at most ${DEFAULT_READ_FILE_MAX_BYTES} file bytes per call. Use offset to continue a truncated read.`, parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path relative to the current workspace.' }, encoding: { type: 'string', description: 'Text encoding. Defaults to utf8.' }, offset: { type: 'number', description: 'Zero-based byte offset. Defaults to 0; use nextOffset from a truncated result to continue.' }, limit: { type: 'number', description: `Maximum file bytes to read (minimum 4). Defaults to and cannot exceed ${DEFAULT_READ_FILE_MAX_BYTES}.` }, }, required: ['path'], additionalProperties: false, }, }
   async execute(input: ReadFileInput, context: AgentToolContext = {}): Promise<AgentToolResult>
 }
 
@@ -2895,6 +3065,11 @@ export function createMcpToolProvider(): AgentToolProvider
 ```ts
 export function resolveToolPath(inputPath: string, context: { cwd?: string; workspaceRoot?: string } = {}): string
 ```
+### `src/tools/recovery.ts`
+
+```ts
+export function createRecoveryTools(recovery: EkkoRecoveryService): AgentTool[]
+```
 ### `src/tools/registry.ts`
 
 ```ts
@@ -2919,6 +3094,7 @@ export interface DefaultToolRegistryOptions {
   authorizer?: AgentToolAuthorizer
   executionTimeoutMs?: number
   codeExec?: (CodeExecToolOptions & { enabled?: boolean }) | false
+  recovery?: EkkoRecoveryService
 }
 
 export function createDefaultToolRegistry(options: DefaultToolRegistryOptions = {}): AgentToolRegistry
@@ -3022,10 +3198,11 @@ export interface TerminalExecInput extends Record<string, unknown> {
 
 export interface TerminalExecToolOptions {
   timeoutMs?: number
+  platform?: NodeJS.Platform
 }
 
 export class TerminalExecTool implements AgentTool<TerminalExecInput> {
-  readonly definition = { name: 'terminal_exec', description: [ 'Run a CLI command, project script, test, build, package manager, or system executable.', 'Prefer command as the executable and args as the argument array; shell string execution is not used.', 'Commands are not confined to the workspace: explicit absolute paths and package-manager forms such as npx --dir are supported.', 'Keep downloads, clones, extracted files, and generated intermediates under the current workspace (prefer .ekko-tmp) when workspace tools need to inspect them.', 'When the user asks to execute or evaluate Node.js, JavaScript, or Python source code, use code_exec instead, even for a one-line snippet.', 'Destructive, privileged, remote-shell, publishing, and other dangerous commands require runtime authorization before execution.', ].join(' '), parameters: { type: 'object', properties: { command: { type: 'string', description: 'Executable command to run. Prefer a bare executable such as "node", "ls", or "/bin/sh".' }, args: { type: 'array', items: { type: 'string' }, description: 'Command arguments.' }, cwd: { type: 'string', description: 'Working directory. Relative paths resolve from the current workspace; explicit absolute system paths are supported.' }, timeoutMs: { type: 'number', description: 'Timeout in milliseconds.' }, }, required: ['command'], additionalProperties: false, }, }
+  readonly definition: AgentTool['definition']
   constructor(options: TerminalExecToolOptions = {})
   async execute(input: TerminalExecInput, context: AgentToolContext = {}): Promise<AgentToolResult>
 }

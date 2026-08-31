@@ -31,6 +31,18 @@ export interface EkkoBackgroundContinuationContext {
   memoryPolicy: 'disabled'
 }
 
+export interface AgentRuntimeRecoveryToolCall {
+  name: string
+  arguments?: Record<string, unknown>
+}
+
+export interface AgentRuntimeRecoveryDirective {
+  active: boolean
+  automaticToolCalls: AgentRuntimeRecoveryToolCall[]
+  allowedToolNames: string[]
+  reminder: string
+}
+
 export interface AgentRuntimeOptions {
   /** Fixed profile identity for tool and memory operations. Per-run input cannot override it. */
   profileId?: string
@@ -42,6 +54,8 @@ export interface AgentRuntimeOptions {
   toolAuthorizer?: AgentToolAuthorizer
   /** Disable every skill source, including constructor and per-run skills. */
   skillsEnabled?: boolean
+  /** Dynamic host capability check used when the Skill filesystem can recover in-process. */
+  skillsAvailable?: () => boolean
   skills?: AgentSkill[]
   /** Fixed directory used by this agent instance for skill discovery and management. */
   skillDirectory?: string
@@ -53,6 +67,10 @@ export interface AgentRuntimeOptions {
   skillReviewEveryToolCalls?: number
   systemPrompt?: string
   runtimeInstructions?: string[]
+  /** Re-evaluated for every run; intended for process-local diagnostics, never memory. */
+  temporaryRuntimeInstructions?: () => string[]
+  /** Re-evaluated before and during every run so active incidents cannot be silently skipped. */
+  recoveryDirective?: () => AgentRuntimeRecoveryDirective
   maxSteps?: number
   maxModelRetries?: number
   maxConsecutiveToolFailures?: number

@@ -49,6 +49,8 @@ export interface MemoryServiceOptions {
   store?: MemoryStore
   enabled?: boolean
   warning?: string
+  storageMode?: 'persistent' | 'ephemeral'
+  onWarning?: (error: unknown) => void
   recentMessageLimit?: number
   automaticRecallTokenBudget?: number
   searchResultLimit?: number
@@ -71,10 +73,14 @@ export class MemoryService {
   private automaticRecallTokenBudget: number
   private searchResultLimit: number
   private readonly warnings = new Set<string>()
+  private readonly storageMode: 'persistent' | 'ephemeral'
+  private readonly onWarning?: (error: unknown) => void
   private captureQueue: Promise<void> = Promise.resolve()
 
   constructor(options: MemoryServiceOptions = {}) {
     this.store = options.store
+    this.onWarning = options.onWarning
+    this.storageMode = options.storageMode ?? 'persistent'
     this.enabled = options.enabled ?? Boolean(options.store)
     this.recentMessageLimit = options.recentMessageLimit ?? DEFAULT_MEMORY_RECENT_MESSAGE_LIMIT
     this.automaticRecallTokenBudget = positiveInteger(
@@ -109,6 +115,12 @@ export class MemoryService {
 
   get isEnabled(): boolean {
     return this.enabled && Boolean(this.store)
+  }
+
+  get toolUnavailableReason(): string | undefined {
+    return this.storageMode === 'ephemeral'
+      ? 'Persistent Ekko memory is unavailable. The active store is ephemeral, so its contents cannot determine whether durable memories exist and memory mutations are disabled for this run.'
+      : undefined
   }
 
   async captureMessages(identity: MemoryRuntimeIdentity, messages: MemoryCaptureMessage[]): Promise<string[]> {
@@ -575,6 +587,11 @@ export class MemoryService {
   private recordWarning(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error)
     this.warnings.add(message)
+    try {
+      this.onWarning?.(error)
+    } catch {
+      // Diagnostics must never replace the underlying memory degradation path.
+    }
   }
 }
 
