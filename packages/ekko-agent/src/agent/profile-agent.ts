@@ -43,6 +43,7 @@ export interface EkkoProfileAgentOptions {
   skills: EkkoSkillManager
   toolApprovals: () => EkkoToolApprovalService
   createRuntime: (options?: CreateEkkoRuntimeOptions) => AgentRuntime
+  onLogError?: (error: unknown) => void
 }
 
 export interface EkkoProfileAgentValidation {
@@ -87,7 +88,11 @@ export class EkkoProfileAgent {
     this.name = options.profile
     this.profile = options.profile
     this.layout = options.layout
-    this.directory = new EkkoProfileDirectoryManager(this.profile, options.directories)
+    this.directory = new EkkoProfileDirectoryManager(
+      this.profile,
+      options.directories,
+      options.layout,
+    )
     this.directories = this.directory
     this.config = options.config
     this.database = options.database
@@ -105,6 +110,7 @@ export class EkkoProfileAgent {
     this.log = new EkkoProfileLogManager(this.profile, new EkkoFileLogger({
       directory: options.layout.logDirectory,
       maxBytes: logConfig.maxBytes,
+      onError: options.onLogError,
     }))
     this.logger = this.log
     this.getToolApprovals = options.toolApprovals
@@ -126,8 +132,8 @@ function validateProfileAgent(
   if (options.layout.profile !== options.profile) {
     throw new Error(`Ekko profile layout mismatch: ${options.profile} != ${options.layout.profile}`)
   }
-  assertManagedDirectory('skill', options.layout.skillDirectory, options.skillsDirectory)
-  assertManagedDirectory('log', options.layout.logDirectory, options.logsDirectory)
+  assertManagedDirectory('skill', options.layout.skillDirectory, options.skillsDirectory, false)
+  assertManagedDirectory('log', options.layout.logDirectory, options.logsDirectory, false)
   assertManagedDirectory('workspace', options.layout.workspaceDirectory, options.workspaceDirectory)
   assertInsideRoot(options.layout.skillDirectory, options.rootDirectory)
   assertInsideRoot(options.layout.logDirectory, options.rootDirectory)
@@ -143,7 +149,7 @@ function validateProfileAgent(
   }
 }
 
-function assertManagedDirectory(kind: string, path: string, parent: string): void {
+function assertManagedDirectory(kind: string, path: string, parent: string, required = true): void {
   assertInsideRoot(path, parent)
   let isDirectory = false
   try {
@@ -151,7 +157,7 @@ function assertManagedDirectory(kind: string, path: string, parent: string): voi
   } catch {
     // The message below is deliberately stable for host diagnostics.
   }
-  if (!isDirectory) throw new Error(`Ekko profile ${kind} directory is not usable: ${path}`)
+  if (required && !isDirectory) throw new Error(`Ekko profile ${kind} directory is not usable: ${path}`)
 }
 
 function assertInsideRoot(path: string, root: string): void {

@@ -13,7 +13,7 @@ import {
 } from "@/api/studio/sessions";
 import type { AvailableModelGroup } from "@/api/hermes/system";
 import { fetchCodingAgentsStatus, inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId, type CodingAgentApiMode, type CodingAgentId } from "@/api/coding-agents";
-import { fetchRuntimeVersionStatus } from "@/api/hermes/runtime-versions";
+import { agentInstallationState, fetchAgentAvailabilitySnapshot } from "@/api/agent-status";
 import { useChatStore, type Session } from "@/stores/hermes/chat";
 import { useAppStore } from "@/stores/hermes/app";
 import { useProfilesStore } from "@/stores/hermes/profiles";
@@ -1197,26 +1197,18 @@ async function confirmNewChat() {
   if (newChatAgent.value === "hermes") {
     newChatLoading.value = true;
     try {
-      const status = await fetchRuntimeVersionStatus({ probeRuntime: false, includeRemote: false });
-      const selectedCli = status.hermes.cliInstallations.find((item) => item.selected);
-      if (!status.hermes.agentVersion && !selectedCli?.version) {
+      const status = await fetchAgentAvailabilitySnapshot();
+      if (agentInstallationState(status, "hermes") === "not-installed") {
         showNewChatModal.value = false;
-        await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        if (isSuperAdmin.value) {
+          await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
+        } else {
+          message.warning(t("codingAgents.installRequired", { agent: "Hermes" }));
+        }
         return;
       }
     } catch (error) {
-      // GET /api/hermes/runtime-versions is gated behind requireSuperAdmin, but
-      // this probe runs on an ordinary user action. A 403/401 means "you may not
-      // read the runtime inventory" — it says nothing about whether the runtime
-      // is installed, so treating it as "missing" locks every non-super_admin
-      // out of creating a Hermes session entirely. Only send someone to the
-      // installer when we actually learned the runtime is absent.
-      const status = (error as { status?: number } | null)?.status;
-      if (status !== 403 && status !== 401) {
-        showNewChatModal.value = false;
-        await router.push({ name: "hermes.agentManager", query: { runtime: "install" } });
-        return;
-      }
+      console.warn("Failed to read Hermes Agent availability before creating a chat:", error);
     } finally {
       newChatLoading.value = false;
     }

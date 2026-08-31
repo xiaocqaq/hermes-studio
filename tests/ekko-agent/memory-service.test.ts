@@ -976,7 +976,8 @@ describe('MemoryService', () => {
       appendAuditEvent: failure,
       close() {},
     } as unknown as MemoryStore
-    const degraded = new MemoryService({ store: failingStore })
+    const onWarning = vi.fn()
+    const degraded = new MemoryService({ store: failingStore, onWarning })
     const client = modelClient()
     const runtime = new AgentRuntime({ modelClient: client, memory: degraded })
 
@@ -985,7 +986,34 @@ describe('MemoryService', () => {
     expect(result.output.content).toBe('ok')
     expect(result.memoryContext?.diagnostics).toMatchObject({ storeStatus: 'degraded', enabled: true })
     expect(result.memoryContext?.diagnostics.warnings).toContain('database unavailable')
+    expect(onWarning).toHaveBeenCalledWith(expect.objectContaining({ message: 'database unavailable' }))
     degraded.close()
+  })
+
+  it('does not report an ephemeral fallback as an empty durable memory store', async () => {
+    const ephemeral = new MemoryService({
+      store,
+      storageMode: 'ephemeral',
+      warning: 'persistent database unavailable',
+    })
+    const search = createMemoryTools(ephemeral).find(tool => tool.definition.name === 'memory_search')!
+
+    await expect(search.execute({ all: true }, {
+      sessionId: 's1',
+      profileId: 'default',
+    })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('cannot determine whether durable memories exist'),
+    })
+
+    const client = modelClient()
+    const runtime = new AgentRuntime({ modelClient: client, memory: ephemeral })
+    await runtime.run({ messages: ['what do you remember?'], contextKey: 's1' })
+    const request = vi.mocked(client.create).mock.calls[0]?.[0] as ModelRequest
+    expect(String(request.messages[0]?.content)).toContain('persistent database unavailable')
+    expect(String(request.messages[0]?.content)).toContain(
+      'Do not interpret empty or missing results as proof that the user has no saved memories',
+    )
   })
 })
 

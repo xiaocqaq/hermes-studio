@@ -1,24 +1,20 @@
 /**
  * Hermes 路径检测工具 - 跨平台兼容
  *
- * Hermes 数据目录在不同平台上的位置：
- * - Windows 原生安装: %LOCALAPPDATA%\hermes when it exists
- * - Linux/macOS/WSL2: ~/.hermes
+ * Hermes 数据目录在所有平台上的默认位置：~/.hermes
  * - 用户自定义: HERMES_HOME 环境变量
  */
 
-import { existsSync } from 'fs'
 import { realpath } from 'fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve, join, win32 as pathWin32 } from 'path'
 import { homedir } from 'os'
 
 /**
- * 智能检测 Hermes 数据目录
+ * 获取 Hermes 数据目录
  *
- * 检测优先级：
+ * 解析优先级：
  * 1. HERMES_HOME 环境变量（用户自定义）
- * 2. Windows: existing %LOCALAPPDATA%\hermes or %APPDATA%\hermes
- * 3. 默认: ~/.hermes（Linux/macOS/WSL2）
+ * 2. 默认: ~/.hermes（Windows/Linux/macOS/WSL2）
  *
  * @returns Hermes 数据目录的绝对路径
  */
@@ -28,25 +24,10 @@ export function detectHermesHome(): string {
     return resolve(process.env.HERMES_HOME)
   }
 
-  const defaultHome = resolve(homedir(), '.hermes')
-
-  // 2. Windows：优先使用存在的原生安装数据目录；不存在时回退到 ~/.hermes。
-  if (process.platform === 'win32') {
-    const candidates = [
-      process.env.LOCALAPPDATA,
-      process.env.APPDATA,
-    ]
-      .map(value => value?.trim())
-      .filter((value): value is string => !!value)
-      .map(value => resolve(value, 'hermes'))
-
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) return candidate
-    }
-  }
-
-  // 3. Linux/macOS：~/.hermes
-  return defaultHome
+  const userHome = process.platform === 'win32'
+    ? process.env.USERPROFILE?.trim() || homedir()
+    : homedir()
+  return resolve(userHome, '.hermes')
 }
 
 /**

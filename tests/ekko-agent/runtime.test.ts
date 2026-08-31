@@ -81,6 +81,85 @@ function emptyStreamingWithCreateFallback(response: ModelResponse): ModelClient 
 }
 
 describe('ekko-agent runtime', () => {
+  it('runs automatic recovery tools before the first model request', async () => {
+    let active = true
+    const repair = vi.fn(async () => {
+      active = false
+      return { ok: true, content: 'persistent database repaired' }
+    })
+    const tools = new AgentToolRegistry()
+    tools.register({
+      definition: {
+        name: 'ekko_repair_database',
+        parameters: { type: 'object', properties: {} },
+      },
+      execute: repair,
+    })
+    const client = modelClient(() => ({ content: 'continued after repair' }))
+    const runtime = new AgentRuntime({
+      modelClient: client,
+      tools,
+      recoveryDirective: () => ({
+        active,
+        automaticToolCalls: active
+          ? [{ name: 'ekko_repair_database', arguments: { strategy: 'retry' } }]
+          : [],
+        allowedToolNames: ['ekko_repair_database'],
+        reminder: 'continue recovery',
+      }),
+    })
+
+    const result = await runtime.run({ messages: ['hello'] })
+
+    expect(repair).toHaveBeenCalledWith({ strategy: 'retry' }, expect.any(Object))
+    expect(result.output.content).toBe('continued after repair')
+    expect(result.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool', step: 0, toolName: 'ekko_repair_database' }),
+    ]))
+  })
+
+  it('does not let a model end or ask permission while recovery remains active', async () => {
+    const requests: ModelRequest[] = []
+    const tools = new AgentToolRegistry()
+    tools.register({
+      definition: {
+        name: 'terminal_exec',
+        parameters: { type: 'object', properties: {} },
+      },
+      execute: vi.fn(async () => ({ ok: true, content: 'unused' })),
+    })
+    const client = modelClient(request => {
+      requests.push(request)
+      return { content: 'Should I repair it?' }
+    })
+    const runtime = new AgentRuntime({
+      modelClient: client,
+      tools,
+      maxSteps: 2,
+      recoveryDirective: () => ({
+        active: true,
+        automaticToolCalls: [],
+        allowedToolNames: ['terminal_exec'],
+        reminder: 'Repair now without asking the user.',
+      }),
+    })
+
+    const result = await runtime.run({ messages: ['hello'] })
+
+    expect(result.output.finishReason).toBe('max_steps')
+    expect(requests).toHaveLength(2)
+    expect(requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolChoice: 'required',
+        tools: [expect.objectContaining({ name: 'terminal_exec' })],
+      }),
+    ]))
+    expect(result.events.filter(event => event.type === 'model.message')).toEqual([])
+    expect(result.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'system', content: 'Repair now without asking the user.' }),
+    ]))
+  })
+
   it('runs a model request without tools', async () => {
     const client = modelClient(() => ({
       content: 'hello',
@@ -2087,10 +2166,43 @@ describe('ekko-agent runtime', () => {
     expect(prompt).toContain('use code_exec, including for one-line snippets')
     expect(prompt).toContain('Do not probe Node or Python with terminal_exec first')
     expect(prompt).toContain('Use terminal_exec for CLI commands')
-    expect(prompt).toContain('npx --dir')
+    expect(prompt).toContain('platform-appropriate package-manager forms')
     expect(prompt).toContain("workspace's .ekko-tmp directory")
     expect(prompt).toContain('After terminal_exec reports a [skill_validation] issue')
     expect(prompt).toContain('do not retry the operation through another tool or language runtime')
     expect(prompt).toContain('prefer a compatible installed or built-in alternative')
+  })
+
+  it('buildSystemPrompt injects Windows-native command rules on Windows', () => {
+    const prompt = buildSystemPrompt({
+      basePrompt: 'Base',
+      context: { platform: 'win32', arch: 'x64' },
+    })
+
+    expect(prompt).toContain('## Command Environment')
+    expect(prompt).toContain('Host platform: Windows (x64)')
+    expect(prompt).toContain('Do not use Unix-only commands or paths')
+    expect(prompt).toContain('command=cmd.exe')
+    expect(prompt).toContain('Windows .cmd and .bat launchers')
+    expect(prompt).toContain('Use where.exe')
+    expect(prompt).toContain('Do not use which')
+    expect(prompt).toContain('Do not invent drive letters or assume WSL is installed')
+  })
+
+  it('buildSystemPrompt injects macOS and Linux command rules independently', () => {
+    const macPrompt = buildSystemPrompt({
+      basePrompt: 'Base',
+      context: { platform: 'darwin', arch: 'arm64' },
+    })
+    const linuxPrompt = buildSystemPrompt({
+      basePrompt: 'Base',
+      context: { platform: 'linux', arch: 'x64' },
+    })
+
+    expect(macPrompt).toContain('Host platform: macOS (arm64)')
+    expect(macPrompt).toContain('BSD variants')
+    expect(macPrompt).toContain('Invoke sh or zsh explicitly')
+    expect(linuxPrompt).toContain('Host platform: Linux (x64)')
+    expect(linuxPrompt).toContain('Invoke sh or bash explicitly')
   })
 })

@@ -3,7 +3,7 @@
   "info": {
     "title": "Hermes Studio API",
     "description": "Hermes Studio API — chat sessions, scheduled jobs, platform channels, model management, skills, memory, logs, file browser, group chat, and terminal.",
-    "version": "0.7.1"
+    "version": "0.7.14"
   },
   "servers": [
     {
@@ -222,6 +222,32 @@
     }
   ],
   "paths": {
+    "/api/agents/availability": {
+      "get": {
+        "tags": [
+          "Agent Status"
+        ],
+        "summary": "Get availability",
+        "description": "GET /api/agents/availability",
+        "operationId": "availability",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/api/agents/status": {
       "get": {
         "tags": [

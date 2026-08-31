@@ -20,15 +20,11 @@
 #   landed in the dead zone. 1095 message rows were unrecoverable. Nobody
 #   noticed for ~48h, until GET /api/hermes/sessions/hermes/groups 500'd.
 #
-# It also re-applies the runtime-versions ACL patch, which an upgrade wipes for
-# the same reason (it edits the published server bundle). Despite this script's
-# name, treat it as "everything that must be re-applied after an upgrade".
-#
 # Usage:
 #   ./install-db-guard.sh                      # install/refresh everything
 #   DEPLOY_HOST=root@1.2.3.4 ./install-db-guard.sh
 #   ./install-db-guard.sh --no-watchdog        # skip the self-stop watchdog
-#   ./install-db-guard.sh --patch-only         # only re-apply the two patches
+#   ./install-db-guard.sh --patch-only         # only re-apply the VACUUM guard
 set -euo pipefail
 
 DEPLOY_HOST=${DEPLOY_HOST:-root@115.159.206.76}
@@ -49,8 +45,7 @@ while [ $# -gt 0 ]; do
 done
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-for f in patch-vacuum-guard.py hermes-db-guard.sh hermes-webui-watchdog.sh \
-         patch-runtime-versions-acl.mjs; do
+for f in patch-vacuum-guard.py hermes-db-guard.sh hermes-webui-watchdog.sh; do
   [ -f "$HERE/$f" ] || { echo "missing $HERE/$f" >&2; exit 1; }
 done
 
@@ -68,30 +63,8 @@ ssh -o ConnectTimeout=20 "$DEPLOY_HOST" "
     && echo '    guard: present' || { echo '    guard: MISSING'; exit 1; }
 "
 
-# ── 1b. the runtime-versions ACL patch ──
-# 0.7.1 gates GET /api/hermes/runtime-versions on super_admin, but ChatPanel
-# probes it when an ordinary user creates a Hermes session. A plain admin gets
-# 403, the client reads that as "runtime missing", and routes them to the
-# installer -- which is super_admin-only, so the guard bounces them back. The
-# New Chat button just flashes access-denied. Relaxing the read-only GET to
-# requireAdmin fixes it; mutating routes stay super_admin (the script verifies
-# that and reverts if it is ever untrue).
-#
-# Needs a service restart to take effect, which this script does NOT do -- it
-# would cut live agent sessions. Restart deliberately:
-#   systemctl restart hermes-webui
-echo "==> [1b] runtime-versions ACL patch"
-scp -q -o ConnectTimeout=20 "$HERE/patch-runtime-versions-acl.mjs" \
-  "$DEPLOY_HOST:/tmp/.patch-runtime-versions-acl.mjs"
-ssh -o ConnectTimeout=20 "$DEPLOY_HOST" "
-  set -e
-  sed -i 's/\r\$//' /tmp/.patch-runtime-versions-acl.mjs
-  node /tmp/.patch-runtime-versions-acl.mjs | sed 's/^/    /'
-"
-
 if [ "$PATCH_ONLY" = "1" ]; then
   echo "==> --patch-only: done"
-  echo "    NOTE: the ACL patch needs 'systemctl restart hermes-webui' to load."
   exit 0
 fi
 
