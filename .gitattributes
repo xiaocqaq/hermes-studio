@@ -6,3 +6,12 @@
 # LF-terminated snippet of the server's hermes_state.py; a CRLF checkout makes
 # that literal contain \r\n, the match count drops to 0 and the patch aborts.
 *.py text eol=lf
+
+# TypeScript and Vue sources must keep LF as well. Several tests assert against
+# the source text itself (readFileSync + toContain with LF-terminated literals,
+# e.g. tests/client/chat-panel-runtime-probe-permission.test.ts). On a CRLF
+# checkout those pass in CI and fail only on Windows, which hides real
+# regressions behind noise. The stored blobs are already LF, so pinning this
+# changes no repository content.
+*.ts text eol=lf
+*.vue text eol=lf

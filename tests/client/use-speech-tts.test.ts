@@ -104,7 +104,12 @@ describe('client TTS unified synthesize flow', () => {
         signal: controller.signal,
       },
     )
-    expect(result.audio).toBeInstanceOf(Blob)
+    // Not `toBeInstanceOf(Blob)`: under jsdom the global Blob is jsdom's, while
+    // `Response#blob()` comes from Node's undici and returns a node:buffer Blob.
+    // Same shape, different realm, so the identity check fails even though the
+    // production path (a single browser realm) is fine. Assert the contract.
+    expect(typeof result.audio.arrayBuffer).toBe('function')
+    expect(result.audio.type).toBe('audio/mpeg')
     expect(result.audio.size).toBeGreaterThan(0)
     expect(result.engine).toBe('openai-engine')
     expect(result.provider).toBe('openai')
