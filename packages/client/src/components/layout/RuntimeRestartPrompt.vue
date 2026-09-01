@@ -6,6 +6,7 @@ import {
   fetchVersionDownloadJobs,
   restartWebUiAfterRuntimeChange,
 } from '@/api/hermes/runtime-versions'
+import { isStoredSuperAdmin } from '@/api/client'
 import { useRuntimeRestartPrompt } from '@/composables/useRuntimeRestartPrompt'
 import { desktopBridge } from '@/utils/desktop-bridge'
 
@@ -46,6 +47,14 @@ function rememberHandledJob(jobId?: string) {
 }
 
 async function checkCompletedRuntimeDownloads() {
+  // GET /api/hermes/runtime-versions/jobs is requireSuperAdmin. Polling it as a
+  // plain admin returns 403, and the shared request helper turns every local-BFF
+  // 403 into a `hermes-auth-notice` -> AuthEventListener toast. At a 2s interval
+  // against a 1.2s notice throttle that is a permanent "access denied" popup on
+  // every page for non-super-admin accounts (same coupling as the 0.7.1 New Chat
+  // bug pinned by tests/client/chat-panel-runtime-probe-permission.test.ts).
+  // Runtime installs are a super-admin action anyway, so nobody else needs the prompt.
+  if (!isStoredSuperAdmin()) return
   try {
     const response = await fetchVersionDownloadJobs()
     const completed = response.jobs.filter(job =>
@@ -113,6 +122,7 @@ function restartLater() {
 }
 
 onMounted(() => {
+  if (!isStoredSuperAdmin()) return
   restoreHandledJobs()
   void checkCompletedRuntimeDownloads()
   pollTimer = setInterval(() => {
