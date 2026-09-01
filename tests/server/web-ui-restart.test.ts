@@ -46,7 +46,7 @@ describe('Web UI restart routing', () => {
     vi.advanceTimersByTime(250)
 
     expect(utimesSync).toHaveBeenCalledWith(
-      expect.stringContaining('packages/server/src/modules/studio/public/dev-restart-trigger.ts'),
+      expect.stringMatching(/packages[\\/]server[\\/]src[\\/]modules[\\/]studio[\\/]public[\\/]dev-restart-trigger\.ts$/),
       expect.any(Date),
       expect.any(Date),
     )
