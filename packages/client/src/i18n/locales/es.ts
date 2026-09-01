@@ -486,6 +486,11 @@ export default {
     downloadTasks: 'Tareas de descarga',
     downloadStarted: 'Descarga iniciada',
     activateSuccess: 'Selección de versión guardada. Reinicia Hermes Studio para usarla.',
+    restartPromptTitle: 'Runtime listo',
+    restartPromptContent: 'Hermes Runtime {version} se ha instalado. ¿Reiniciar ahora para usarlo?',
+    restartLater: 'Más tarde',
+    restartNow: 'Reiniciar ahora',
+    restartFailed: 'Error al reiniciar',
     jobStatus: {
       queued: 'En cola',
       running: 'En ejecución',
@@ -3030,6 +3035,8 @@ jobTriggered: 'Job ejecutado',
   },
 
   changelog: {
+    new_0_7_15_1: 'La detección de versión de Hermes Runtime ahora consulta directamente el entorno local seleccionado sin iniciar comprobaciones de actualización por red, manteniendo fiables el arranque y la gestión de versiones sin conexión (#2822)',
+    new_0_7_15_2: 'Al activar o instalar un Runtime ahora se pregunta si se desea reiniciar de inmediato; elegir «en el próximo inicio» ya no reinicia automáticamente la aplicación de escritorio ni la Web UI independiente (#2822)',
     new_0_7_14_1: 'Ekko ahora limita cada lectura de archivo a 50 KB con continuación por desplazamiento de bytes y genera comandos de terminal nativos de la plataforma, evitando enviar comandos exclusivos de Unix a Windows (#2812)',
     new_0_7_14_2: 'Desktop y la Web UI independiente ahora validan cada Runtime secuencialmente con hermes --version, run_agent.py y cli.py; las versiones dañadas se marcan como no disponibles, el fallback continúa con la siguiente instalación y la gestión de versiones permite volver a descargarlas (#2815)',
     new_0_7_13_1: 'La instalación y limpieza del Runtime de Windows ahora reintenta las operaciones de archivos bloqueadas temporalmente por Defender o los indexadores, evitando errores EACCES, EBUSY, ENOTEMPTY y EPERM al eliminar o activar versiones descargadas (#2801)',
