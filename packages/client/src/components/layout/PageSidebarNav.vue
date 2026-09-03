@@ -44,6 +44,14 @@ function openModels() {
   void router.push({ name: 'hermes.models' })
 }
 
+function openJobs() {
+  void router.push({ name: 'hermes.jobs' })
+}
+
+function openKanban() {
+  void router.push({ name: 'hermes.kanban', query: { board: 'default' } })
+}
+
 function openGroupChat() {
   if (props.active === 'group') return
   void router.push({ name: 'hermes.groupChat' })
@@ -138,6 +146,40 @@ function openWorkflow() {
           <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" />
         </svg>
         <span>{{ t('sidebar.models') }}</span>
+      </button>
+      <button class="page-sidebar-tab" type="button" @click="openJobs">
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="4" width="18" height="18" rx="2" />
+          <path d="M16 2v4M8 2v4M3 10h18" />
+        </svg>
+        <span>{{ t('sidebar.jobs') }}</span>
+      </button>
+      <button class="page-sidebar-tab" type="button" @click="openKanban">
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="3" width="5" height="18" rx="1" />
+          <rect x="10" y="3" width="5" height="12" rx="1" />
+          <rect x="17" y="3" width="4" height="16" rx="1" />
+        </svg>
+        <span>{{ t('sidebar.kanban') }}</span>
       </button>
     </div>
     <div class="conversation-switch conversation-switch--four" role="tablist" aria-label="Conversation type">
