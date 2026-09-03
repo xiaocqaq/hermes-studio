@@ -19,6 +19,7 @@ import {
 } from '../../protocol/adapters/responses'
 import {
   anthropicMessagesSseToResponsesEvents,
+  normalizeResponsesSseEvents,
   openAiChatSseToResponsesEvents,
   openAiResponsesSseToResponsesEvents,
   type CanonicalResponsesEvent,
@@ -110,13 +111,48 @@ function anthropicMessagesUrl(target: CodexProxyTarget): string {
   return resolveAnthropicMessagesUrl(target.baseUrl)
 }
 
+export function normalizeGrokResponsesRequest(body: any): any {
+  if (!body || typeof body !== 'object') return body
+  let changed = false
+  const input = Array.isArray(body.input) ? body.input.map((item: any) => {
+    if (!item || typeof item !== 'object' || item.role !== 'system') return item
+    changed = true
+    return { ...item, role: 'developer' }
+  }) : body.input
+  const normalized = changed ? { ...body, input } : body
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'max_output_tokens')) return normalized
+  const { max_output_tokens: _maxOutputTokens, ...withoutMaxOutputTokens } = normalized
+  return withoutMaxOutputTokens
+}
+
+export function normalizeGrokChatCompletionsRequest(body: any): any {
+  if (!body || typeof body !== 'object' || !Array.isArray(body.messages)) return body
+  let changed = false
+  const messages = body.messages.map((message: any) => {
+    if (!message || typeof message !== 'object' || message.role !== 'system') return message
+    changed = true
+    return { ...message, role: 'developer' }
+  })
+  return changed ? { ...body, messages } : body
+}
+
+function nativeResponsesBody(target: CodexProxyTarget, body: any, stream?: boolean): any {
+  const normalized = target.agentId === 'grok' ? normalizeGrokResponsesRequest(body) : body
+  return truncateResponsesToolOutputs({
+    ...normalized,
+    model: target.model,
+    ...(stream === undefined ? {} : { stream }),
+  })
+}
+
 async function callOpenAiChat(target: CodexProxyTarget, body: any): Promise<any> {
   if (target.apiMode !== 'chat_completions') {
     const err = new Error(`Codex proxy only supports chat_completions targets, got ${target.apiMode}`)
     ;(err as any).status = 501
     throw err
   }
-  const chatBody = responsesToOpenAiChat(body, target)
+  const adapted = responsesToOpenAiChat(body, target)
+  const chatBody = target.agentId === 'grok' ? normalizeGrokChatCompletionsRequest(adapted) : adapted
   return agentRunGateway.completeJson({
     url: chatCompletionsUrl(target),
     apiKey: target.apiKey,
@@ -148,7 +184,7 @@ async function callOpenAiResponses(target: CodexProxyTarget, body: any): Promise
     ;(err as any).status = 501
     throw err
   }
-  const responsesBody = truncateResponsesToolOutputs({ ...body, model: target.model })
+  const responsesBody = nativeResponsesBody(target, body)
   return agentRunGateway.completeJson({
     url: resolveResponsesUrl(target.baseUrl),
     apiKey: target.apiKey,
@@ -180,11 +216,16 @@ function responseEventForCodexClient(target: CodexProxyTarget, event: CanonicalR
 }
 
 function observableResponsesEvents(target: CodexProxyTarget, events: AsyncIterable<CanonicalResponsesEvent>): AsyncIterable<CanonicalResponsesEvent> {
-  async function* observe() {
-    for await (const event of events) {
+async function* observe() {
+    for await (const event of normalizeResponsesSseEvents(events)) {
       codingAgentRunManager.handleProxyUsageEvent(target.agentSessionId, event)
       const clientEvent = responseEventForCodexClient(target, event)
-      codingAgentRunManager.handleResponseEvent(target.agentSessionId, clientEvent)
+      // Grok prints the same streamed text through its `streaming-json`
+      // stdout. Feeding proxy events directly into the run as well would
+      // append every model delta twice.
+      if (target.agentId !== 'grok') {
+        codingAgentRunManager.handleResponseEvent(target.agentSessionId, clientEvent)
+      }
       yield clientEvent
     }
   }
@@ -198,7 +239,8 @@ async function openAiChatToResponsesSseStream(target: CodexProxyTarget, body: an
     throw err
   }
 
-  const chatBody = responsesToOpenAiChat(body, target, true)
+  const adapted = responsesToOpenAiChat(body, target, true)
+  const chatBody = target.agentId === 'grok' ? normalizeGrokChatCompletionsRequest(adapted) : adapted
   const stream = await agentRunGateway.streamBytes({
     url: chatCompletionsUrl(target),
     apiKey: target.apiKey,
@@ -240,7 +282,7 @@ async function openAiResponsesSseStream(target: CodexProxyTarget, body: any): Pr
     throw err
   }
 
-  const responsesBody = truncateResponsesToolOutputs({ ...body, model: target.model, stream: true })
+  const responsesBody = nativeResponsesBody(target, body, true)
   const stream = await agentRunGateway.streamBytes({
     url: resolveResponsesUrl(target.baseUrl),
     apiKey: target.apiKey,
@@ -255,7 +297,10 @@ export async function codexProxyResponses(ctx: Context) {
   try {
     // Sanitize once before API-mode dispatch so native Responses, Chat
     // Completions, and Anthropic adapters all receive the same bounded history.
-    const requestBody = stripHistoricalResponsesInlineImages(ctx.request.body || {})
+    const sanitizedBody = stripHistoricalResponsesInlineImages(ctx.request.body || {})
+    const requestBody = target.agentId === 'grok'
+      ? normalizeGrokResponsesRequest(sanitizedBody)
+      : sanitizedBody
     if ((requestBody as any).stream === true) {
       const stream = target.apiMode === 'anthropic_messages'
         ? await anthropicMessagesToResponsesSseStream(target, requestBody)

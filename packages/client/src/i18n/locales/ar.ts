@@ -423,6 +423,15 @@ export default {
     aiHelpDrawerTitle: 'Ekko · استكشاف أخطاء Agent',
     aiHelpGeneralPrompt: 'استخدم Skill باسم `hermes-studio-installation` واتبع تعليمات التوجيه الخاصة به لاختيار المرجع المناسب للـ Agent والمشكلة. ساعدني في تشخيص أو إدارة تثبيت Agents أو تحديثها أو إزالتها على هذا الجهاز. افحص مصدر التثبيت الفعلي وكل مسارات الملفات التنفيذية التي تم حلها وبيئة Node/npm وبادئات مدير الحزم المناسبة. إذا كان السياق غير كافٍ، فاسأل أولاً عن Agent والعرض المطلوب حله. حافظ على إعدادات المستخدم وبيانات المصادقة والمحادثات واطلب التأكيد قبل أي تغييرات مدمرة.',
     aiHelpPrompt: 'استخدم Skill باسم `hermes-studio-installation` واتبع تعليمات التوجيه الخاصة به لاختيار المرجع المناسب لهذا الـ Agent والمشكلة. شخّص هذا الفشل في صفحة Agents.\n\nAgent: {name}\nمعرّف Agent: {id}\nالعملية: {operation}\nالأمر التنفيذي: {command}\nحزمة npm: {package}\nالخطأ الأصلي:\n{error}\n\nافحص مصدر التثبيت وكل مسارات الملفات التنفيذية التي تم حلها وبيئة Node/npm وبادئات مدير الحزم المناسبة. حافظ على إعدادات المستخدم وبيانات المصادقة والمحادثات. اشرح السبب الجذري أولاً واطلب التأكيد قبل أي تغييرات مدمرة.',
+    legacyDataMigrationTitle: 'تم العثور على بيانات Hermes قديمة',
+    legacyDataMigrationDescription: 'عثر Hermes Studio على بيانات في مجلد Windows قديم. هل تريد نقلها إلى مجلد البيانات الحالي؟',
+    legacyDataMigrationSource: 'المجلد القديم',
+    legacyDataMigrationTarget: 'المجلد الحالي',
+    legacyDataMigrationWarning: 'سيُعاد تشغيل Studio بعد التأكيد، وقبل بدء الخدمات المحلية ستُستبدل الملفات المتطابقة بالنسخ القديمة مع الاحتفاظ بالملفات الموجودة فقط في المجلد الحالي. سيظهر هذا السؤال مرة واحدة فقط.',
+    legacyDataMigrationPositive: 'نقل البيانات القديمة',
+    legacyDataMigrationNegative: 'عدم النقل',
+    legacyDataMigrationSuccess: 'تمت جدولة النقل. سيُعاد تشغيل Hermes Studio وينقل البيانات قبل بدء الخدمات المحلية.',
+    legacyDataMigrationFailed: 'فشل نقل بيانات Hermes القديمة: {error}',
   },
 
   runtimeVersions: {
@@ -3316,7 +3325,7 @@ export default {
     cacheHitRate: 'معدل إصابة الذاكرة المؤقتة',
     modelBreakdown: 'التوزيع حسب النموذج',
     agentBreakdown: 'التوزيع حسب الوكيل',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', ekkoAgent: 'Ekko', unknown: 'غير معروف' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: 'غير معروف' },
     dailyTrend: 'الاستخدام اليومي',
     date: 'التاريخ',
     tokens: 'التوكنات',
@@ -3433,6 +3442,11 @@ export default {
 
   // Changelog
   changelog: {
+    new_0_7_16_1: 'يعالج تطبيق Desktop الآن طلبات إعادة تشغيل Runtime الصادرة من Web UI المضمّن عبر Electron، مع إعادة تشغيل نظيفة وحماية من الطلبات المكررة، مع الإبقاء على إعادة تشغيل Web UI المستقل (#2827)',
+    new_0_7_16_2: 'يمكن الآن تشغيل Agents الخاصة بـ Claude وCodex وPi في workflows والمحادثات الجماعية بوضع scoped أو global؛ ويعزل وضع global المطالبات والبيئات التي يديرها Studio مع الحفاظ على إعدادات المستخدم (#2828)',
+    new_0_7_16_3: 'أصبح Grok CLI الآن Coding Agent متكاملًا يدعم نماذج proxy في وضع scoped، ووضع global المعزول، واستئناف الجلسات الأصلي، وتتبع الاستخدام، وSkills، وworkflows، والمحادثات الجماعية (#2832)',
+    new_0_7_16_4: 'في Windows، يتيح Agent Manager ترحيلًا لمرة واحدة لإعدادات Hermes القديمة وبيانات المصادقة والذاكرة وSkills وقواعد البيانات من AppData إلى %USERPROFILE%\\.hermes مع الاحتفاظ بالبيانات الأصلية (#2834)',
+    new_0_7_16_5: 'ينسخ ترحيل بيانات Windows القديمة الآن بيانات المستخدم والملفات الجانبية لقواعد البيانات فقط مع التحقق وإمكانية التراجع، ويستبعد Runtimes والجلسات والسجلات القابلة للاستبدال لتجنب فشل الملفات المقفلة (#2836)',
     new_0_7_15_1: 'أصبح اكتشاف إصدار Hermes Runtime يفحص البيئة المحلية المحددة مباشرةً دون تشغيل فحوصات تحديث عبر الشبكة، مما يحافظ على موثوقية بدء التشغيل وإدارة الإصدارات دون اتصال (#2822)',
     new_0_7_15_2: 'أصبح تفعيل Runtime أو تثبيته يسأل إن كان يجب إعادة التشغيل فورًا؛ ولم يعد اختيار «عند التشغيل التالي» يعيد تشغيل تطبيق Desktop أو Web UI المستقل تلقائيًا (#2822)',
     new_0_7_14_1: 'يحد Ekko الآن كل قراءة ملف إلى 50 كيلوبايت مع إمكانية المتابعة بإزاحة البايت، ويولّد أوامر طرفية أصلية لكل منصة حتى لا يتلقى Windows أوامر خاصة بـ Unix (#2812)',

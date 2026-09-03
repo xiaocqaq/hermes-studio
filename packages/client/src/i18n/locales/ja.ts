@@ -435,6 +435,15 @@ export default {
     aiHelpDrawerTitle: 'Ekko · Agent トラブルシューティング',
     aiHelpGeneralPrompt: '`hermes-studio-installation` Skill のルーティング指示に従い、Agent と問題に適した reference を選択してください。このデバイスでの Agent のインストール、更新、削除に関する診断や管理を支援してください。実際のインストール元、解決されたすべての実行ファイルパス、Node/npm 環境、該当するパッケージマネージャーのプレフィックスを確認してください。コンテキストが不足している場合は、対象の Agent と症状を先に質問してください。ユーザー設定、認証情報、会話データは保持し、破壊的な変更の前には再度確認を求めてください。',
     aiHelpPrompt: '`hermes-studio-installation` Skill のルーティング指示に従い、この Agent と問題に適した reference を選択して、Agents ページでのこの失敗を診断してください。\n\nAgent: {name}\nAgent ID: {id}\n操作: {operation}\n実行コマンド: {command}\nnpm パッケージ: {package}\n元のエラー:\n{error}\n\nインストール元、解決されたすべての実行ファイルパス、Node/npm 環境、該当するパッケージマネージャーのプレフィックスを確認してください。ユーザー設定、認証情報、会話データは保持してください。最初に根本原因を説明し、破壊的な変更の前には再度確認を求めてください。',
+    legacyDataMigrationTitle: '以前の Hermes データが見つかりました',
+    legacyDataMigrationDescription: '以前の Windows データディレクトリに Hermes データが見つかりました。現在のデータディレクトリへ移行しますか？',
+    legacyDataMigrationSource: '以前のディレクトリ',
+    legacyDataMigrationTarget: '現在のディレクトリ',
+    legacyDataMigrationWarning: '確認後に Studio が再起動し、ローカルサービスの開始前に同名ファイルを以前のデータで上書きします。現在のディレクトリにのみあるファイルは保持されます。この確認は一度だけ表示されます。',
+    legacyDataMigrationPositive: '以前のデータを移行',
+    legacyDataMigrationNegative: '移行しない',
+    legacyDataMigrationSuccess: '移行を予約しました。Hermes Studio を再起動し、ローカルサービスの開始前にデータを移行します。',
+    legacyDataMigrationFailed: '以前の Hermes データの移行に失敗しました：{error}',
   },
 
   runtimeVersions: {
@@ -2601,7 +2610,7 @@ export default {
     cacheHitRate: 'キャッシュヒット率',
     modelBreakdown: 'モデル別内訳',
     agentBreakdown: 'Agent 別内訳',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', ekkoAgent: 'Ekko', unknown: '不明' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: '不明' },
     dailyTrend: '日別使用量',
     date: '日付',
     tokens: 'トークン',
@@ -3034,6 +3043,11 @@ export default {
   },
 
   changelog: {
+    new_0_7_16_1: 'Desktop は内蔵 Web UI からの Runtime 再起動要求を Electron 経由で処理し、重複防止付きのクリーンな再起動を行うようになりました。スタンドアロン Web UI の再起動動作も維持されます (#2827)',
+    new_0_7_16_2: 'ワークフローとグループチャットで Claude、Codex、Pi Agent を scoped または global モードで起動できるようになりました。global モードは Studio 管理のプロンプトと実行環境を分離し、ユーザー設定を保持します (#2828)',
+    new_0_7_16_3: 'Grok CLI が正式な Coding Agent として追加され、scoped プロキシモデル、分離された global モード、ネイティブなセッション再開、使用量追跡、Skills、ワークフロー、グループチャットに対応しました (#2832)',
+    new_0_7_16_4: 'Windows の Agent Manager で、AppData にある旧 Hermes の設定、認証、メモリ、Skills、データベースを %USERPROFILE%\\.hermes へ一度だけ移行できるようになり、元データも保持されます (#2834)',
+    new_0_7_16_5: 'Windows の旧データ移行は、検証とロールバック付きでユーザーデータとデータベースのサイドカーだけをコピーし、置換可能な Runtime、セッション、ログを除外してファイルロックによる失敗を防ぐようになりました (#2836)',
     new_0_7_15_1: 'Hermes Runtime のバージョン検出は、ネットワーク更新確認を実行せず、選択されたローカル環境を直接調べるようになり、オフラインでも起動とバージョン管理が安定しました (#2822)',
     new_0_7_15_2: 'Runtime の有効化またはインストール後、すぐに再起動するか確認するようになりました。「次回起動時に使用」を選んでも Desktop やスタンドアロン Web UI は自動再起動しません (#2822)',
     new_0_7_14_1: 'Ekko は各ファイル読み取りを 50 KB に制限し、バイトオフセットで続きを取得できるようになりました。また、プラットフォーム固有のターミナルコマンドを生成するため、Windows に Unix 専用コマンドが送られません (#2812)',

@@ -423,6 +423,15 @@ export default {
     aiHelpDrawerTitle: 'Ekko · Agent troubleshooting',
     aiHelpGeneralPrompt: 'Use the `hermes-studio-installation` Skill and follow its routing instructions to select the reference appropriate to the Agent and problem. Help me diagnose or manage Agent installation, updates, or removal on this device. Inspect the actual installation source, every resolved executable path, the Node/npm environment, and the applicable package-manager prefix. Ask which Agent and symptom I need help with if context is missing. Preserve user configuration, authentication, and conversation data, and ask for confirmation before making destructive changes.',
     aiHelpPrompt: 'Use the `hermes-studio-installation` Skill and follow its routing instructions to select the reference appropriate to this Agent and problem. Diagnose this Agents page failure.\n\nAgent: {name}\nAgent ID: {id}\nOperation: {operation}\nExecutable: {command}\nnpm package: {package}\nOriginal error:\n{error}\n\nInspect the installation source, every resolved executable path, Node/npm environment, and applicable package-manager prefix. Preserve user configuration, authentication, and conversation data. Explain the root cause and ask for confirmation before making destructive changes.',
+    legacyDataMigrationTitle: 'Legacy Hermes data found',
+    legacyDataMigrationDescription: 'Hermes Studio found data in a legacy Windows data directory. Would you like to migrate it to the current data directory?',
+    legacyDataMigrationSource: 'Legacy directory',
+    legacyDataMigrationTarget: 'Current directory',
+    legacyDataMigrationWarning: 'Studio will restart after confirmation and, before local services start, overwrite matching files with the legacy copies while preserving current-only files. This question is shown only once.',
+    legacyDataMigrationPositive: 'Migrate legacy data',
+    legacyDataMigrationNegative: 'Do not migrate',
+    legacyDataMigrationSuccess: 'Migration scheduled. Hermes Studio will restart and migrate the data before starting local services.',
+    legacyDataMigrationFailed: 'Legacy Hermes data migration failed: {error}',
   },
 
   runtimeVersions: {
@@ -3359,7 +3368,7 @@ export default {
     cacheHitRate: 'Cache Hit Rate',
     modelBreakdown: 'Model Breakdown',
     agentBreakdown: 'Agent Breakdown',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', ekkoAgent: 'Ekko', unknown: 'Unknown' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: 'Unknown' },
     dailyTrend: 'Daily Usage',
     date: 'Date',
     tokens: 'Tokens',
@@ -3476,6 +3485,11 @@ export default {
 
   // Changelog
   changelog: {
+    new_0_7_16_1: 'Desktop now handles Runtime restart requests from its bundled Web UI through Electron, using a clean relaunch with duplicate protection while standalone Web UI restarts continue to work (#2827)',
+    new_0_7_16_2: 'Workflows and group chats can now launch Claude, Codex, and Pi Agents in scoped or global mode; global runs keep Studio-managed prompts and environments isolated while preserving user configuration (#2828)',
+    new_0_7_16_3: 'Grok CLI is now a first-class Coding Agent with scoped proxy models, isolated global mode, native session resume, usage tracking, Skills, workflows, and group chat support (#2832)',
+    new_0_7_16_4: 'On Windows, Agent Manager now offers a one-time migration of legacy Hermes configuration, authentication, memory, Skills, and databases from AppData to %USERPROFILE%\\.hermes while preserving the original data (#2834)',
+    new_0_7_16_5: 'Windows legacy data migration now copies only user data and database sidecars with validation and rollback, excluding replaceable Runtimes, sessions, and logs to avoid locked-file failures (#2836)',
     new_0_7_15_1: 'Hermes Runtime version detection now probes the selected local environment directly without triggering network update checks, keeping startup and Version Management reliable offline (#2822)',
     new_0_7_15_2: 'Activating or installing a Runtime now asks whether to restart immediately; choosing “next launch” no longer restarts the desktop or standalone Web UI automatically (#2822)',
     new_0_7_14_1: 'Ekko now caps each file read at 50 KB with byte-offset continuation and generates platform-native terminal commands, so Windows no longer receives Unix-only commands (#2812)',

@@ -61,6 +61,7 @@ describe('RuntimeRestartPrompt', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     sessionStorage.clear()
+    localStorage.clear()
     // The jobs endpoint is requireSuperAdmin, so the prompt only polls for a
     // super admin. Seed that role for the default cases.
     localStorage.setItem('hermes_api_key', jwtForRole('super_admin'))
@@ -140,5 +141,23 @@ describe('RuntimeRestartPrompt', () => {
 
     expect(api.fetchVersionDownloadJobs).not.toHaveBeenCalled()
     wrapper.unmount()
+  })
+
+  it('keeps handled Runtime downloads suppressed after an app relaunch', async () => {
+    const first = mount(RuntimeRestartPrompt)
+    await flushPromises()
+
+    await first.get('[data-testid="runtime-restart-later"]').trigger('click')
+    expect(first.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(false)
+    first.unmount()
+
+    sessionStorage.clear()
+
+    const second = mount(RuntimeRestartPrompt)
+    await flushPromises()
+
+    expect(second.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(false)
+    expect(api.restartWebUiAfterRuntimeChange).not.toHaveBeenCalled()
+    second.unmount()
   })
 })

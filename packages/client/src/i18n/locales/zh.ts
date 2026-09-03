@@ -423,6 +423,15 @@ export default {
     aiHelpDrawerTitle: 'Ekko · Agent 管理排障',
     aiHelpGeneralPrompt: '请使用 `hermes-studio-installation` Skill，并遵循 Skill 自己的路由说明，根据 Agent 和问题类型选择合适的 reference。帮我排查或管理这台设备上的 Agent 安装、更新或删除问题。请检查实际安装来源、所有实际命中的可执行文件路径、Node/npm 环境和对应的包管理器前缀。如果上下文不足，请先询问我要处理的 Agent 和具体症状。不要删除用户配置、认证信息或会话数据，任何破坏性修改都必须再次征得用户确认。',
     aiHelpPrompt: '请使用 `hermes-studio-installation` Skill，并遵循 Skill 自己的路由说明，根据这次 Agent 和问题类型选择合适的 reference，排查这次 Agents 页面操作失败。\n\nAgent：{name}\nAgent ID：{id}\n操作类型：{operation}\n可执行命令：{command}\nnpm 包：{package}\n原始错误：\n{error}\n\n请检查安装来源、所有实际命中的可执行文件路径、Node/npm 环境和对应的包管理器前缀。不要删除用户配置、认证信息或会话数据。先说明根因，任何破坏性修改都必须再次征得用户确认。',
+    legacyDataMigrationTitle: '发现旧版 Hermes 数据',
+    legacyDataMigrationDescription: 'Hermes Studio 在旧版 Windows 数据目录中发现了数据。是否将其迁移到当前数据目录？',
+    legacyDataMigrationSource: '旧目录',
+    legacyDataMigrationTarget: '当前目录',
+    legacyDataMigrationWarning: '同意后 Studio 将自动重启，并在服务启动前用旧目录中的同名文件覆盖当前目录；当前目录独有的文件会保留。此询问只会显示一次。',
+    legacyDataMigrationPositive: '迁移旧数据',
+    legacyDataMigrationNegative: '不迁移',
+    legacyDataMigrationSuccess: '已记录迁移选择，Hermes Studio 将重启并在服务启动前迁移数据。',
+    legacyDataMigrationFailed: '旧版 Hermes 数据迁移失败：{error}',
   },
 
   runtimeVersions: {
@@ -3407,7 +3416,7 @@ export default {
     cacheHitRate: '缓存命中率',
     modelBreakdown: '模型分布',
     agentBreakdown: 'Agent 分布',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', ekkoAgent: 'Ekko', unknown: '未知' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: '未知' },
     dailyTrend: '每日用量',
     date: '日期',
     tokens: 'Token',
@@ -3524,6 +3533,11 @@ export default {
 
   // 更新日志
   changelog: {
+    new_0_7_16_1: '桌面端现在会通过 Electron 处理内置 Web UI 发起的 Runtime 重启请求，使用带重复请求保护的干净重启，同时保留独立 Web UI 的重启行为（#2827）',
+    new_0_7_16_2: '工作流和群聊现在可用 scoped 或 global 模式启动 Claude、Codex 和 Pi Agent；global 模式会隔离 Studio 管理的提示词和运行环境，同时保留用户配置（#2828）',
+    new_0_7_16_3: 'Grok CLI 现作为一等 Coding Agent 集成，支持 scoped 代理模型、隔离 global 模式、原生会话续接、用量统计、Skills、工作流和群聊（#2832）',
+    new_0_7_16_4: 'Windows Agent 管理器现在会一次性提示将旧 AppData 中的 Hermes 配置、认证、记忆、Skills 和数据库迁移到 %USERPROFILE%\\.hermes，并保留原始数据（#2834）',
+    new_0_7_16_5: 'Windows 旧数据迁移现在只复制用户数据和数据库 sidecar，通过校验和回滚保护结果，并排除可替换的 Runtime、会话和日志，避免锁文件导致迁移失败（#2836）',
     new_0_7_15_1: 'Hermes Runtime 版本检测现在会直接探测选中的本地环境，不再触发网络更新检查，让离线启动和版本管理更加可靠（#2822）',
     new_0_7_15_2: '启用或安装 Runtime 后现在会询问是否立即重启；选择“下次启动使用”不再自动重启桌面端或独立 Web UI（#2822）',
     new_0_7_14_1: 'Ekko 现在将单次文件读取限制为 50 KB，支持按字节偏移继续读取，并生成平台原生命令，避免向 Windows 发送仅适用于 Unix 的命令（#2812）',

@@ -475,6 +475,8 @@ export type EkkoProfileMemoryForgetInput = ProfileMemoryInput<MemoryForgetInput>
 
 export type EkkoProfileMemoryWriteInput = ProfileMemoryInput<MemoryWriteInput>
 
+export type EkkoProfileMemoryBatchInput = ProfileMemoryInput<MemoryBatchInput>
+
 export class EkkoProfileDirectoryManager {
   readonly skillDirectory: string
   readonly logDirectory: string
@@ -537,6 +539,7 @@ export class EkkoProfileMemoryManager {
   listMessages(input: MemoryMessageListInput): Promise<MemoryMessage[]>
   listAuditEvents(query: EkkoProfileMemoryAuditQuery = {}): Promise<MemoryAuditEvent[]>
   write(input: EkkoProfileMemoryWriteInput): Promise<MemoryWriteResult>
+  applyBatch(input: EkkoProfileMemoryBatchInput): Promise<MemoryBatchResult>
   forget(input: EkkoProfileMemoryForgetInput): Promise<MemoryForgetResult>
   scheduleCapture(identity: EkkoProfileMemoryIdentity, messages: MemoryCaptureMessage[]): void
   drain(): Promise<void>
@@ -1619,6 +1622,7 @@ export class MemoryService {
   async listMessages(input: MemoryMessageListInput): Promise<MemoryMessage[]>
   async listAuditEvents(query: MemoryAuditQuery = {}): Promise<MemoryAuditEvent[]>
   async write(input: MemoryWriteInput): Promise<MemoryWriteResult>
+  async applyBatch(input: MemoryBatchInput): Promise<MemoryBatchResult>
   async forget(input: MemoryForgetInput): Promise<MemoryForgetResult>
   scheduleCapture(identity: MemoryRuntimeIdentity, messages: MemoryCaptureMessage[], writePolicy: MemoryWritePolicy = 'automatic'): void
   async drain(): Promise<void>
@@ -1647,6 +1651,7 @@ export class SqliteMemoryStore implements MemoryStore {
   async supersedeNode(input: { oldNodeId: string; newNode: MemoryNode; reason: string; actor: string; sessionId?: string }): Promise<void>
   async updateNodeStatus(input: { nodeId: string; status: MemoryNode['status']; reason: string; actor: string; expectedRevision?: number; sessionId?: string }): Promise<boolean>
   async deleteNode(input: { nodeId: string; mode: 'soft' | 'hard'; reason: string; actor: string; expectedRevision?: number; sessionId?: string }): Promise<boolean>
+  async applyMutations(mutations: MemoryStoreMutation[]): Promise<void>
   async queryNodes(query: MemoryQuery): Promise<MemoryNode[]>
   async appendAuditEvent(event: MemoryAuditEvent): Promise<void>
   async listAuditEvents(query: MemoryAuditQuery = {}): Promise<MemoryAuditEvent[]>
@@ -1837,6 +1842,23 @@ export interface MemoryWriteResult {
   reason?: string
 }
 
+export type MemoryBatchOperation = | Omit<MemoryWriteInput, 'actor' | 'identity'> | { operation: 'delete' targetId: string expectedRevision: number mode?: 'soft' | 'hard' reason: string }
+
+export interface MemoryBatchInput {
+  operations: MemoryBatchOperation[]
+  actor?: string
+  explicitUserIntent?: boolean
+  identity?: Partial<MemoryRuntimeIdentity>
+}
+
+export interface MemoryBatchResult {
+  accepted: boolean
+  done: boolean
+  results: MemoryWriteResult[]
+  failedOperationIndex?: number
+  reason?: string
+}
+
 export interface MemoryCreateInput {
   kind: MemoryKind
   itemKey?: string
@@ -1898,6 +1920,8 @@ export interface MemoryForgetResult {
   reason?: string
 }
 
+export type MemoryStoreMutation = | { type: 'upsert' node: MemoryNode audit?: Omit<MemoryAuditEvent, 'id' | 'nodeId' | 'createdAt'> } | { type: 'supersede' oldNodeId: string newNode: MemoryNode reason: string actor: string sessionId?: string } | { type: 'status' nodeId: string status: MemoryNodeStatus reason: string actor: string expectedRevision?: number sessionId?: string updatedAt?: string } | { type: 'delete' nodeId: string mode: 'soft' | 'hard' reason: string actor: string expectedRevision?: number sessionId?: string updatedAt?: string }
+
 export interface MemoryStore {
   appendMessage(message: MemoryMessage): Promise<void>
   listRecentMessages(input: { sessionId: string; limit: number }): Promise<MemoryMessage[]>
@@ -1907,6 +1931,7 @@ export interface MemoryStore {
   supersedeNode(input: { oldNodeId: string; newNode: MemoryNode; reason: string; actor: string; sessionId?: string }): Promise<void>
   updateNodeStatus(input: { nodeId: string; status: MemoryNodeStatus; reason: string; actor: string; expectedRevision?: number; sessionId?: string }): Promise<boolean>
   deleteNode(input: { nodeId: string; mode: 'soft' | 'hard'; reason: string; actor: string; expectedRevision?: number; sessionId?: string }): Promise<boolean>
+  applyMutations(mutations: MemoryStoreMutation[]): Promise<void>
   queryNodes(query: MemoryQuery): Promise<MemoryNode[]>
   appendAuditEvent(event: MemoryAuditEvent): Promise<void>
   listAuditEvents(query?: MemoryAuditQuery): Promise<MemoryAuditEvent[]>
@@ -2540,7 +2565,7 @@ export interface SystemPromptInput {
 
 export const EKKO_OUTPUT_FORMAT_GUIDELINES = `## Image and File Output When returning an image, video, or file to the user, use Markdown with an existing local absolute path. - Unix/macOS/WSL image: \`![description](/absolute/path/image.png)\` - Windows image: \`![description](<C:/absolute/path/image.png>)\` - Unix/macOS/WSL file: \`[filename](/absolute/path/file.pdf)\` - Windows file: \`[filename](<C:/absolute/path/file.pdf>)\` - Use forward slashes for Windows paths. - Wrap paths containing spaces, non-ASCII characters, or special characters in angle brackets. - Do not use relative paths or \`file://\` URLs. - Verify that the referenced file exists before returning it.`
 
-export const EKKO_TOOL_EXECUTION_GUIDELINES = `## Tool Execution Treat external commands, language packages, and other prerequisites named by a Skill as requirements, not proof that they are installed. - Before relying on an external dependency whose availability has not already been established, perform a lightweight availability check. - Do not run the primary dependency-based approach merely to discover whether its dependency exists. - Request independent tool calls together in one response. The runtime executes tools marked as parallel-safe concurrently while preserving serial barriers for stateful or dependent work. - When the user asks to execute or evaluate Node.js, JavaScript, or Python source code, use code_exec, including for one-line snippets. Do not probe Node or Python with terminal_exec first; code_exec resolves its runtime. - Use terminal_exec for CLI commands, project scripts, tests, builds, package managers, and other executables. - terminal_exec may use explicit absolute system paths and platform-appropriate package-manager forms. Follow the Command Environment section below; this capability is not limited to workspace files. - By default, keep downloads, clones, archives, extracted repositories, and generated intermediates inside the current workspace. Prefer the workspace's .ekko-tmp directory for disposable files so workspace-scoped file and image tools can inspect them. Use a system or external path only when the user or task explicitly requires it. - Dangerous tool calls may pause for runtime authorization. If authorization is denied, do not retry the operation through another tool or language runtime unless the user explicitly changes that decision. - After terminal_exec reports a [skill_validation] issue, do not claim the Skill installation is complete. Call skill_view for each writable local Skill and repair it with skill_manage until its frontmatter passes validation. Do not mutate read-only external Skill directories. - If a dependency is unavailable, prefer a compatible installed or built-in alternative. Install it only when installation is necessary and appropriate for the user's task. - Verify created artifacts before returning them.`
+export const EKKO_TOOL_EXECUTION_GUIDELINES = `## Tool Execution Treat external commands, language packages, and other prerequisites named by a Skill as requirements, not proof that they are installed. - Before relying on an external dependency whose availability has not already been established, perform a lightweight availability check. - Do not run the primary dependency-based approach merely to discover whether its dependency exists. - Request independent tool calls together in one response. The runtime executes tools marked as parallel-safe concurrently while preserving serial barriers for stateful or dependent work. - When accompanying a tool call with progress text, write a complete standalone sentence. Do not end tool-call preambles with ":" or "：" as though the tool result will complete the sentence; omit the preamble when it adds no value. - When the user asks to execute or evaluate Node.js, JavaScript, or Python source code, use code_exec, including for one-line snippets. Do not probe Node or Python with terminal_exec first; code_exec resolves its runtime. - Use terminal_exec for CLI commands, project scripts, tests, builds, package managers, and other executables. - terminal_exec may use explicit absolute system paths and platform-appropriate package-manager forms. Follow the Command Environment section below; this capability is not limited to workspace files. - By default, keep downloads, clones, archives, extracted repositories, and generated intermediates inside the current workspace. Prefer the workspace's .ekko-tmp directory for disposable files so workspace-scoped file and image tools can inspect them. Use a system or external path only when the user or task explicitly requires it. - Dangerous tool calls may pause for runtime authorization. If authorization is denied, do not retry the operation through another tool or language runtime unless the user explicitly changes that decision. - After terminal_exec reports a [skill_validation] issue, do not claim the Skill installation is complete. Call skill_view for each writable local Skill and repair it with skill_manage until its frontmatter passes validation. Do not mutate read-only external Skill directories. - If a dependency is unavailable, prefer a compatible installed or built-in alternative. Install it only when installation is necessary and appropriate for the user's task. - Verify created artifacts before returning them.`
 
 export const EKKO_CLARIFICATION_GUIDELINES = `## User Clarification When missing user input materially blocks or changes the task, call the clarify tool and wait for the response. - Do not present a blocking clarification question as an ordinary assistant response. - Ask one concise question that collects the necessary information; provide choices only for a short fixed set of answers. - Do not call clarify when a safe, reasonable assumption lets you continue without materially changing the outcome.`
 
@@ -3001,7 +3026,7 @@ export interface WriteFileInput extends Record<string, unknown> {
 
 export class ReadFileTool implements AgentTool<ReadFileInput> {
   readonly concurrency = 'parallel' as const
-  readonly definition = { name: 'read_file', description: `Read a text file from the workspace, reading at most ${DEFAULT_READ_FILE_MAX_BYTES} file bytes per call. Use offset to continue a truncated read.`, parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path relative to the current workspace.' }, encoding: { type: 'string', description: 'Text encoding. Defaults to utf8.' }, offset: { type: 'number', description: 'Zero-based byte offset. Defaults to 0; use nextOffset from a truncated result to continue.' }, limit: { type: 'number', description: `Maximum file bytes to read (minimum 4). Defaults to and cannot exceed ${DEFAULT_READ_FILE_MAX_BYTES}.` }, }, required: ['path'], additionalProperties: false, }, }
+  readonly definition = { name: 'read_file', description: `Read a text file from the local filesystem, reading at most ${DEFAULT_READ_FILE_MAX_BYTES} file bytes per call. Relative paths resolve from the current working directory; absolute paths and paths outside workspaceRoot are supported. Use offset to continue a truncated read.`, parameters: { type: 'object', properties: { path: { type: 'string', description: 'File path. Relative paths resolve from the current working directory; absolute paths are supported.' }, encoding: { type: 'string', description: 'Text encoding. Defaults to utf8.' }, offset: { type: 'number', description: 'Zero-based byte offset. Defaults to 0; use nextOffset from a truncated result to continue.' }, limit: { type: 'number', description: `Maximum file bytes to read (minimum 4). Defaults to and cannot exceed ${DEFAULT_READ_FILE_MAX_BYTES}.` }, }, required: ['path'], additionalProperties: false, }, }
   async execute(input: ReadFileInput, context: AgentToolContext = {}): Promise<AgentToolResult>
 }
 
@@ -3063,6 +3088,8 @@ export function createMcpToolProvider(): AgentToolProvider
 ### `src/tools/path-safety.ts`
 
 ```ts
+export function resolveUnrestrictedToolPath( inputPath: string, context: { cwd?: string; workspaceRoot?: string } = {}, ): string
+
 export function resolveToolPath(inputPath: string, context: { cwd?: string; workspaceRoot?: string } = {}): string
 ```
 ### `src/tools/recovery.ts`
@@ -3189,6 +3216,12 @@ export function skillValidationResult( name: string, content: string, ): { statu
 ### `src/tools/terminal.ts`
 
 ```ts
+export const DEFAULT_TERMINAL_EXEC_MAX_OUTPUT_BYTES = 100_000
+
+export const DEFAULT_TERMINAL_EXEC_MAX_STDERR_BYTES = 25_000
+
+export const DEFAULT_TERMINAL_EXEC_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
+
 export interface TerminalExecInput extends Record<string, unknown> {
   command: string
   args?: string[]
@@ -3199,6 +3232,9 @@ export interface TerminalExecInput extends Record<string, unknown> {
 export interface TerminalExecToolOptions {
   timeoutMs?: number
   platform?: NodeJS.Platform
+  maxOutputBytes?: number
+  maxStderrBytes?: number
+  maxArtifactBytes?: number
 }
 
 export class TerminalExecTool implements AgentTool<TerminalExecInput> {
@@ -3212,10 +3248,16 @@ export function createTerminalTools(options: TerminalExecToolOptions = {}): Agen
 ### `src/tools/tool-result-sanitizer.ts`
 
 ```ts
+export const DEFAULT_TOOL_RESULT_MAX_TEXT_BYTES = 256_000
+
+export const DEFAULT_TOOL_RESULT_MAX_TEXT_ARTIFACT_BYTES = 25 * 1024 * 1024
+
 export interface ToolResultSanitizerOptions {
   tempRoot?: string
   ttlMs?: number
   maxBytes?: number
+  maxTextBytes?: number
+  maxTextArtifactBytes?: number
   now?: number
 }
 
@@ -3340,6 +3382,8 @@ export async function ensureWorkspaceTempRoot( context: Pick<AgentToolContext, '
 export function workspaceTempEnvironment(directory: string): NodeJS.ProcessEnv
 
 export function workspaceToolAssetDirectory( context: Pick<AgentToolContext, 'workspaceRoot' | 'cwd'> = {}, ): string
+
+export async function ensureToolAssetDirectory(directory: string): Promise<string>
 ```
 
 <!-- END GENERATED EKKO PUBLIC API -->

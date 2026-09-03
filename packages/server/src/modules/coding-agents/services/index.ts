@@ -1,7 +1,7 @@
 import { execFile } from 'child_process'
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'crypto'
 import { existsSync, readdirSync, realpathSync } from 'fs'
-import { chmod, mkdir, open, readFile, rename, rm, stat, writeFile } from 'fs/promises'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { delimiter, dirname, join } from 'path'
 import { promisify } from 'util'
@@ -11,18 +11,22 @@ import { getCompatibleCustomProviders } from '../../studio/contracts/provider-co
 import { registerClaudeCodeProxyTarget } from './claude-code/proxy'
 import { registerCodexProxyTarget, restoreCodexProxyTarget } from './codex/proxy'
 import { compactCodexThread } from './runtime/codex-compact'
+import { hermesPromptDocument, writeManagedPromptFile } from './prompt-file'
 import type { ApiMode, CodingAgentImageInput } from '../protocol/types'
 import { PROVIDER_PRESETS } from '../../studio/contracts/providers'
 import { getModelContextLength, getModelRuntimeCapabilities } from '../../studio/public/provider-runtime'
 import { getSystemPrompt } from '../../studio/public/runs/prompt'
 import { codingAgentRunManager } from './runtime/run-manager'
 import { PI_EXTENDED_THINKING_LEVEL_MAP, piModelSupportsThinking } from './pi/thinking'
+import { GROK_API_KEY_ENV, GROK_CODING_AGENT_DEFINITION, GROK_PROVIDER_ID } from './grok/definition'
+import { prepareGlobalGrokRuntime, prepareScopedGrokRuntime } from './grok/config'
 import { getSession, updateSession, type HermesSessionRow } from '../../studio/public/sessions'
 import type { SessionState } from '../../studio/contracts/runs/session'
 import { normalizeWindowsCommandPath, windowsCmdShimExecution, windowsCommandNeedsShell, type WindowsCommandExecution } from '../../studio/public/windows-command'
 import { updateAgentStatus } from '../../studio/public/agent-status-registry'
 import { assertScopedCodingAgentProviderAllowed } from '../protocol/provider-policy'
 import type { CodingAgentRuntime } from '../../studio/contracts/agents/runtime'
+import { defaultCodingAgentWorkspace } from '../../studio/public/workspace-manager'
 
 const execFileAsync = promisify(execFile)
 const LAUNCH_API_MODES = new Set<ApiMode>(['chat_completions', 'codex_responses', 'anthropic_messages'])
@@ -42,6 +46,7 @@ const PI_MCP_ADAPTER_VERSION = '2.24.0'
 const PI_MCP_ADAPTER_PACKAGE = `pi-mcp-adapter@${PI_MCP_ADAPTER_VERSION}`
 const PI_CODING_AGENT_VERSION = '0.84.1'
 const PI_CODING_AGENT_PACKAGE = `@earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}`
+const GROK_NPM_REGISTRY = 'https://registry.npmjs.org'
 const PI_PROVIDER_ID = 'hermes-studio'
 const PI_PROXY_TARGET_FILE = 'proxy-target.json'
 const PI_DYNAMIC_PROMPT_FILE = 'dynamic-system-prompt.md'
@@ -67,8 +72,7 @@ const LEGACY_HERMES_MCP_COMMANDS = new Set([
   'hermes-studio-mcp',
 ])
 const HERMES_MCP_MANAGED_ENV_KEY = 'HERMES_WEB_UI_MANAGED_MCP'
-const HERMES_PROMPT_BLOCK_BEGIN = '<!-- BEGIN HERMES WEB UI PROMPT -->'
-const HERMES_PROMPT_BLOCK_END = '<!-- END HERMES WEB UI PROMPT -->'
+const GLOBAL_CODEX_SHADOW_LINK_DIRS = new Set(['memories', 'plugins', 'rules', 'skills', 'vendor_imports', 'visualizations'])
 
 let cachedCodexVersion: { version: string; checkedAt: number } | null = null
 
@@ -290,6 +294,7 @@ export interface CodingAgentLaunchResult {
   env: Record<string, string>
   shellCommand: string
   files: Array<{ key: string; path: string; absolutePath: string }>
+  promptFile?: string
   reasoningEffort?: string
 }
 
@@ -326,12 +331,14 @@ const TOOL_DEFINITIONS: CodingAgentDefinition[] = [
     command: 'pi',
     packageName: '@earendil-works/pi-coding-agent',
   },
+  GROK_CODING_AGENT_DEFINITION,
 ]
 
 const CONFIG_FILE_DEFINITIONS: Record<CodingAgentId, Array<Omit<CodingAgentConfigFileDefinition, 'absolutePath'> & { scopedPath: string }>> = {
   'claude-code': [
     { key: 'settings', path: '~/.claude/settings.json', scopedPath: 'settings.json', language: 'json' },
     { key: 'mcp', path: '~/.claude/mcp.json', scopedPath: 'mcp.json', language: 'json' },
+    { key: 'memory', path: '~/.claude/CLAUDE.md', scopedPath: 'CLAUDE.md', language: 'markdown' },
     { key: 'prompt', path: '~/.claude/hermes-rules.md', scopedPath: 'hermes-rules.md', language: 'markdown' },
   ],
   codex: [
@@ -344,6 +351,11 @@ const CONFIG_FILE_DEFINITIONS: Record<CodingAgentId, Array<Omit<CodingAgentConfi
     { key: 'settings', path: '~/.pi/agent/settings.json', scopedPath: 'settings.json', language: 'json' },
     { key: 'agents', path: '~/.pi/agent/AGENTS.md', scopedPath: 'AGENTS.md', language: 'markdown' },
     { key: 'mcp', path: '~/.pi/agent/mcp.json', scopedPath: 'mcp.json', language: 'json' },
+  ],
+  grok: [
+    { key: 'auth', path: '~/.grok/auth.json', scopedPath: 'auth.json', language: 'json' },
+    { key: 'config', path: '~/.grok/config.toml', scopedPath: 'config.toml', language: 'ini' },
+    { key: 'agents', path: '~/.grok/AGENTS.md', scopedPath: 'AGENTS.md', language: 'markdown' },
   ],
 }
 
@@ -781,9 +793,10 @@ function storedCodingAgentMode(session: HermesSessionRow | null): 'scoped' | 'gl
   return session?.provider === 'global' ? 'global' : 'scoped'
 }
 
-function persistedAgentId(id: string): 'claude' | 'codex' | 'pi' {
+function persistedAgentId(id: string): 'claude' | 'codex' | 'pi' | 'grok' {
   if (id === 'codex') return 'codex'
   if (id === 'pi') return 'pi'
+  if (id === 'grok') return 'grok'
   return 'claude'
 }
 
@@ -837,7 +850,7 @@ function getScopedRuntimeConfigRoot(
 }
 
 function getScopedWorkspaceRoot(scope: Required<CodingAgentConfigScope>): string {
-  return join(getWebUiHome(), CODING_AGENT_HOME_DIR, 'workspace', scope.profile, scope.provider)
+  return defaultCodingAgentWorkspace(scope.profile, scope.provider)
 }
 
 function resolveLaunchWorkspaceRoot(scope: Required<CodingAgentConfigScope>, workspace?: string | null): string {
@@ -954,54 +967,63 @@ function expandHomePath(path: string): string {
   return path
 }
 
-function hermesPromptDocument(systemPrompt = getSystemPrompt()): string {
-  return [
-    HERMES_PROMPT_BLOCK_BEGIN,
-    systemPrompt.trim(),
-    HERMES_PROMPT_BLOCK_END,
-    '',
-  ].join('\n')
+function getGlobalCodexHome(): string {
+  return process.env.CODEX_HOME?.trim() || join(getGlobalConfigHome(), '.codex')
 }
 
-function upsertManagedMarkdownBlock(existing: string, block: string): string {
-  const normalizedBlock = block.endsWith('\n') ? block : `${block}\n`
-  const start = existing.indexOf(HERMES_PROMPT_BLOCK_BEGIN)
-  const end = existing.indexOf(HERMES_PROMPT_BLOCK_END)
-  if (start >= 0 && end >= start) {
-    const afterEnd = end + HERMES_PROMPT_BLOCK_END.length
-    const before = existing.slice(0, start).replace(/\s*$/, '')
-    const after = existing.slice(afterEnd).replace(/^\s*/, '')
-    return [before, normalizedBlock.trimEnd(), after].filter(Boolean).join('\n\n') + '\n'
-  }
-  const trimmedExisting = existing.replace(/\s*$/, '')
-  if (!trimmedExisting) return normalizedBlock
-  return `${trimmedExisting}\n\n${normalizedBlock}`
+function shouldCopyGlobalCodexFile(name: string): boolean {
+  if (name === 'AGENTS.md' || name === 'AGENTS.override.md') return false
+  if (name === 'history.jsonl' || name === 'session_index.jsonl' || name === 'transcription-history.jsonl') return false
+  if (name === 'codex-tui.log' || name.startsWith('.codex-global-state')) return false
+  if (name.endsWith('.sqlite') || name.endsWith('.sqlite-shm') || name.endsWith('.sqlite-wal')) return false
+  return true
 }
 
-async function writeManagedPromptFile(definition: CodingAgentConfigFileDefinition): Promise<{ key: string; path: string; absolutePath: string }> {
-  let existing = ''
+async function pathEntryExists(path: string): Promise<boolean> {
   try {
-    existing = await readFile(definition.absolutePath, 'utf-8')
+    await lstat(path)
+    return true
   } catch (err: any) {
-    if (err?.code !== 'ENOENT') throw err
-  }
-  const next = upsertManagedMarkdownBlock(existing, hermesPromptDocument())
-  if (next !== existing) {
-    await mkdir(dirname(definition.absolutePath), { recursive: true })
-    await writeFile(definition.absolutePath, next, 'utf-8')
-  }
-  return {
-    key: definition.key,
-    path: definition.path,
-    absolutePath: definition.absolutePath,
+    if (err?.code === 'ENOENT') return false
+    throw err
   }
 }
 
-async function ensureGlobalCodingAgentPromptFile(id: CodingAgentId): Promise<Array<{ key: string; path: string; absolutePath: string }>> {
-  if (id !== 'claude-code') return []
-  const definition = getLiveConfigFileDefinition(id, 'prompt')
-  if (!definition) return []
-  return [await writeManagedPromptFile(definition)]
+async function linkGlobalCodexDirectory(source: string, target: string): Promise<void> {
+  if (await pathEntryExists(target)) return
+  try {
+    await symlink(source, target, process.platform === 'win32' ? 'junction' : 'dir')
+  } catch (err: any) {
+    if (err?.code !== 'EEXIST' && err?.code !== 'EPERM' && err?.code !== 'ENOTSUP') throw err
+  }
+}
+
+async function activeGlobalCodexInstructions(sourceHome: string): Promise<string> {
+  const override = await safeReadFile(join(sourceHome, 'AGENTS.override.md')) || ''
+  if (override.trim()) return override
+  return await safeReadFile(join(sourceHome, 'AGENTS.md')) || ''
+}
+
+async function prepareGlobalCodexShadowHome(rootDir: string, systemPrompt: string): Promise<string> {
+  const sourceHome = getGlobalCodexHome()
+  await mkdir(rootDir, { recursive: true, mode: 0o700 })
+
+  if (sourceHome !== rootDir && existsSync(sourceHome)) {
+    const entries = await readdir(sourceHome, { withFileTypes: true })
+    for (const entry of entries) {
+      const source = join(sourceHome, entry.name)
+      const target = join(rootDir, entry.name)
+      if (entry.isFile() && shouldCopyGlobalCodexFile(entry.name)) {
+        await copyFile(source, target)
+      } else if (entry.isDirectory() && GLOBAL_CODEX_SHADOW_LINK_DIRS.has(entry.name)) {
+        await linkGlobalCodexDirectory(source, target)
+      }
+    }
+  }
+
+  const promptPath = join(rootDir, 'AGENTS.md')
+  await writeManagedPromptFile(promptPath, systemPrompt, await activeGlobalCodexInstructions(sourceHome))
+  return promptPath
 }
 
 function shellQuote(value: string): string {
@@ -1985,6 +2007,12 @@ export function getCodingAgentDefinition(id: string): CodingAgentDefinition | nu
   return TOOL_DEFINITIONS.find(tool => tool.id === id) || null
 }
 
+export function withCodingAgentRegistry(id: CodingAgentId, args: string[]): string[] {
+  return id === 'grok'
+    ? [...args, `--registry=${GROK_NPM_REGISTRY}`]
+    : [...args]
+}
+
 export function getCodingAgentConfigFileDefinitions(id: string): CodingAgentConfigFileDefinition[] {
   const tool = getCodingAgentDefinition(id)
   if (!tool) return []
@@ -2130,7 +2158,10 @@ export async function checkUpdateAgent(id: string): Promise<CodingAgentUpdateRes
       return { success: true, tool: status, latestVersion, updateAvailable }
     }
     const env = await commandEnv()
-    const { stdout } = await runNpm(['view', tool.packageName, 'version'], { timeout: 15_000, env })
+    const { stdout } = await runNpm(
+      withCodingAgentRegistry(tool.id, ['view', tool.packageName, 'version']),
+      { timeout: 15_000, env },
+    )
     const latestVersion = stdout.trim()
     const status = await getCodingAgentStatus(tool)
     const updateAvailable = !!latestVersion && status.installed && !versionGte(status.version, latestVersion)
@@ -2157,7 +2188,10 @@ export async function installCodingAgent(id: string): Promise<CodingAgentMutatio
   installingTools.add(tool.id)
   try {
     const env = await commandEnv()
-    await runNpm(['install', '-g', tool.id === 'pi' ? PI_CODING_AGENT_PACKAGE : tool.packageName], {
+    await runNpm(withCodingAgentRegistry(
+      tool.id,
+      ['install', '-g', tool.id === 'pi' ? PI_CODING_AGENT_PACKAGE : tool.packageName],
+    ), {
       timeout: 10 * 60 * 1000,
       env,
     })
@@ -2391,17 +2425,44 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
         reasoningEffort: String(input.reasoningEffort || '').trim(),
       }
     }
-    const files = await ensureGlobalCodingAgentPromptFile(tool.id)
-    const promptFile = files.find(file => file.key === 'prompt')?.absolutePath || ''
-    const args = tool.id === 'claude-code'
-      ? [
-          ...(promptFile ? ['--append-system-prompt-file', promptFile] : []),
-          ...claudeCodePermissionArgs(),
-        ]
-      : []
+    const rootDir = getScopedRuntimeConfigRoot(tool.id, scope, input)
+    const systemPrompt = String(input.groupSystemPrompt || '').trim() || getSystemPrompt()
+    await mkdir(rootDir, { recursive: true })
+
+    let promptFile = ''
+    let files: Array<{ key: string; path: string; absolutePath: string }> = []
+    let args: string[] = []
+    let env: Record<string, string> = {}
+
+    if (tool.id === 'claude-code') {
+      promptFile = join(rootDir, 'hermes-rules.md')
+      await writeManagedPromptFile(promptFile, systemPrompt, '')
+      files = [{ key: 'prompt', path: 'hermes-rules.md', absolutePath: promptFile }]
+      args = ['--append-system-prompt-file', promptFile, ...claudeCodePermissionArgs()]
+    } else if (tool.id === 'codex') {
+      promptFile = await prepareGlobalCodexShadowHome(rootDir, systemPrompt)
+      files = [{ key: 'agents', path: 'AGENTS.md', absolutePath: promptFile }]
+      env = { CODEX_HOME: rootDir }
+    } else if (tool.id === 'grok') {
+      const prepared = await prepareGlobalGrokRuntime({
+        sourceHome: process.env.GROK_HOME?.trim() || join(getGlobalConfigHome(), '.grok'),
+        rootDir,
+        systemPrompt,
+        managedMcpToml: codexMcpConfigToml(scope.profile),
+      })
+      promptFile = prepared.promptFile
+      files = prepared.files
+      env = { GROK_HOME: rootDir }
+      args = ['--always-approve', '--no-auto-update']
+    } else {
+      promptFile = join(rootDir, 'APPEND_SYSTEM.md')
+      await writeManagedPromptFile(promptFile, systemPrompt, '')
+      files = [{ key: 'prompt', path: 'APPEND_SYSTEM.md', absolutePath: promptFile }]
+      args = ['--append-system-prompt', promptFile]
+    }
     const shellCommand = buildLaunchShellCommand({
       workspaceDir,
-      env: {},
+      env,
       command: tool.command,
       args,
     })
@@ -2411,13 +2472,14 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
       profile: scope.profile,
       provider: scope.provider,
       model: '',
-      rootDir: workspaceDir,
+      rootDir,
       workspaceDir,
       command: tool.command,
       args,
-      env: {},
+      env,
       shellCommand,
       files,
+      promptFile,
     }
   }
 
@@ -2602,7 +2664,7 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
       '--model', model,
       ...(reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`] : []),
     ]
-  } else {
+  } else if (tool.id === 'pi') {
     if (!existsSync(getPiMcpAdapterEntry())) {
       const err = new Error(`Pi MCP Adapter ${PI_MCP_ADAPTER_VERSION} is not installed. Reinstall Pi from Coding Agents.`)
       ;(err as any).status = 400
@@ -2684,6 +2746,51 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
         ? [input.approveProjectConfig === true ? '--approve' : '--no-approve']
         : []),
     ]
+  } else {
+    const proxyTarget = baseUrl && apiKey
+      ? registerCodexProxyTarget({
+          profile: scope.profile,
+          provider,
+          model,
+          baseUrl,
+          apiKey,
+          apiMode,
+          reasoningEffort,
+          agentId: tool.id,
+          agentSessionId: isolatedInput.agentSessionId,
+          chatSessionId: isolatedInput.sessionId,
+        })
+      : null
+    const capabilities = getModelRuntimeCapabilities({ profile: scope.profile, provider, model })
+    const baseConfigRoot = getScopedConfigRoot(tool.id, scope)
+    const prepared = await prepareScopedGrokRuntime({
+      rootDir,
+      provider,
+      model,
+      displayName: displayNameForModel(model),
+      proxyBaseUrl: proxyTarget?.baseUrl || baseUrl,
+      contextWindow: capabilities.contextWindow,
+      outputLimit: capabilities.outputLimit,
+      reasoningEffort,
+      systemPrompt: scopedSystemPrompt,
+      userInstructions: await safeReadFile(join(baseConfigRoot, 'AGENTS.md')) || '',
+      managedMcpToml: codexMcpConfigToml(
+        scope.profile,
+        await safeReadFile(getLiveConfigFileDefinition(tool.id, 'config')?.absolutePath || ''),
+        await safeReadFile(join(baseConfigRoot, 'config.toml')),
+      ),
+    })
+    files.push(...prepared.files)
+    env = {
+      GROK_HOME: rootDir,
+      [GROK_API_KEY_ENV]: proxyTarget?.token || apiKey,
+    }
+    args = [
+      '--model', GROK_PROVIDER_ID,
+      '--always-approve',
+      '--no-auto-update',
+      ...(reasoningEffort ? ['--reasoning-effort', reasoningEffort] : []),
+    ]
   }
 
   let shellCommand = buildLaunchShellCommand({
@@ -2720,6 +2827,11 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
     env,
     shellCommand,
     files,
+    promptFile: tool.id === 'claude-code'
+      ? join(rootDir, 'hermes-rules.md')
+      : tool.id === 'grok'
+        ? join(rootDir, 'AGENTS.md')
+        : undefined,
     reasoningEffort,
   }
 }
@@ -2764,7 +2876,7 @@ export async function startCodingAgentRun(
       ))
     : false
   const existingNativeSessionId = canResumeNativeSession ? existingSession?.agent_native_session_id || '' : ''
-  const agentNativeSessionId = resolvedInput.agentNativeSessionId || existingNativeSessionId || (id === 'claude-code' || id === 'pi' ? randomUUID() : '')
+  const agentNativeSessionId = resolvedInput.agentNativeSessionId || existingNativeSessionId || (id === 'claude-code' || id === 'pi' || id === 'grok' ? randomUUID() : '')
   const launch = await prepareCodingAgentLaunch(id, {
     ...resolvedInput,
     sessionId,
@@ -2800,6 +2912,7 @@ export async function startCodingAgentRun(
     shellCommand: launch.shellCommand,
     workspaceDir: launch.workspaceDir,
     env: runtimeEnv,
+    promptFile: launch.promptFile,
     state,
     reasoningEffort: launch.reasoningEffort,
     sessionSource: sessionSource === 'global_agent' || sessionSource === 'workflow' || sessionSource === 'group_chat'

@@ -349,13 +349,6 @@ export class AgentRuntime {
     const memoryIdentity = this.memoryIdentityFor(input)
     const memoryPreparation = await this.prepareMemory(input, memoryIdentity, runId)
     const memoryContext = memoryPreparation?.context
-    const captureMessages = this.memoryCaptureMessages(input)
-    const forceInitialMemoryForget = Boolean(
-      memoryIdentity && hasExplicitMemoryForgetIntent(captureMessages),
-    )
-    const forceInitialMemoryWrite = Boolean(
-      memoryIdentity && !forceInitialMemoryForget && hasExplicitMemoryIntent(captureMessages),
-    )
     const sessionId = this.contextKeyFor(input)?.trim()
     const activeBoundaryRun = sessionId
       ? this.registerBoundaryRun(sessionId, runId)
@@ -489,23 +482,6 @@ export class AgentRuntime {
         const modelClient = this.modelClientFor(input)
         emit({ type: 'model.started', runId, step })
         const request = this.modelRequest(input, messages, modelClient, contextKey, modelSignal)
-        if (forceInitialMemoryForget && request.tools) {
-          const forgetTools = request.tools.filter(tool => (
-            tool.name === 'memory_search' || tool.name === 'memory_get' || tool.name === 'memory_forget'
-          ))
-          if (forgetTools.length) {
-            request.tools = forgetTools
-            request.toolChoice = 'required'
-          }
-        } else if (step === 1 && forceInitialMemoryWrite) {
-          const writeTools = request.tools?.filter(tool => (
-            tool.name === 'memory_search' || tool.name === 'memory_get' || tool.name === 'memory_write'
-          ))
-          if (writeTools?.length) {
-            request.tools = writeTools
-            request.toolChoice = 'required'
-          }
-        }
         const recoveryDirective = this.currentRecoveryDirective()
         if (recoveryDirective?.active && request.tools?.length) {
           const allowed = new Set(recoveryDirective.allowedToolNames)
@@ -528,7 +504,7 @@ export class AgentRuntime {
         )
         if (activeBoundaryRun?.pending) return completeBoundaryInterrupt(step - 1)
         const response = modelResult.response
-        const assistantMessage = modelResponseToAgentMessage(response)
+        const assistantMessage = normalizeToolCallPreamble(modelResponseToAgentMessage(response))
         const toolCalls = assistantMessage.toolCalls ?? []
         const blockedByRecovery = toolCalls.length === 0 && this.currentRecoveryDirective()?.active === true
         if (activeBoundaryRun && toolCalls.length > 0) {
@@ -1689,6 +1665,17 @@ function removeHistoricalSkillViews(
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError()
+}
+
+function normalizeToolCallPreamble(message: AgentOutputMessage): AgentOutputMessage {
+  if (!message.toolCalls?.length || !/[:：]\s*$/.test(message.content)) return message
+  const trailingWhitespace = message.content.match(/\s*$/)?.[0] || ''
+  const body = message.content.slice(0, message.content.length - trailingWhitespace.length)
+  const punctuation = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/u.test(body) ? '。' : '.'
+  return {
+    ...message,
+    content: `${body.slice(0, -1)}${punctuation}${trailingWhitespace}`,
+  }
 }
 
 function enterBoundaryModelPhase(
