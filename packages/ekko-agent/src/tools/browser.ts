@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, unlinkSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { AgentTool, AgentToolContext, AgentToolResult } from './types'
@@ -30,6 +30,10 @@ interface BrowserToolInput extends Record<string, unknown> {
 
 const BROWSER_TOOL_TIMEOUT_MS = 120_000
 const BROWSER_OPEN_TIMEOUT_MS = 180_000
+const BROWSER_CLOSE_TIMEOUT_MS = 5_000
+const BROWSER_CLOSE_CONCURRENCY = 4
+const BROWSER_SESSION_DIR_PREFIX = 'eab_'
+const BROWSER_SESSION_NAME_PATTERN = /^e_[0-9a-f]{10}$/
 const SCROLL_PIXELS = 500
 const METADATA_HOSTS = new Set([
   '169.254.169.254',
@@ -370,6 +374,170 @@ export function isAgentBrowserAvailable(): boolean {
   return resolveAgentBrowser() !== null
 }
 
+type BrowserSessionRecord = {
+  sessionName: string
+  socketDir: string
+  cwd: string
+  lastUsedAt: number
+}
+
+export type BrowserTeardownSummary = {
+  attempted: number
+  closed: number
+  failed: number
+}
+
+/**
+ * Browser sessions this process has started a daemon for.
+ *
+ * The daemon is not our child. The `agent-browser` CLI we spawn is short-lived
+ * and starts the daemon detached, so killing the CLI on timeout or abort leaves
+ * the daemon and its entire Chrome tree running. The only other reaper is the
+ * daemon's own idle timer (`AGENT_BROWSER_IDLE_TIMEOUT_MS`, 10 minutes here),
+ * which does not fire while a page keeps the browser busy.
+ *
+ * That gap is not theoretical: on a 3.7 GB production box it accumulated ~20
+ * stray Chrome trees at ~100 MB each, which pinned swap low enough that
+ * earlyoom SIGTERMed hermes-webui on every startup burst — a restart loop that
+ * looked exactly like a crash. So we remember every session we touch and close
+ * it explicitly at the points where it stops being useful.
+ */
+const activeBrowserSessions = new Map<string, BrowserSessionRecord>()
+
+/** Session names (`e_<hash>`) this process has started a daemon for. */
+export function listActiveBrowserSessions(): string[] {
+  return [...activeBrowserSessions.keys()]
+}
+
+/**
+ * Close one browser session and its Chrome tree.
+ *
+ * Accepts either the raw session id used by the caller (the chat session id) or
+ * the derived `e_<hash>` session name. Best-effort: never throws, and resolves
+ * false when there was nothing to close or the CLI failed.
+ */
+export async function closeBrowserSession(
+  sessionKey: string,
+  options: { timeoutMs?: number } = {},
+): Promise<boolean> {
+  const sessionName = resolveBrowserSessionName(sessionKey)
+  const record = activeBrowserSessions.get(sessionName)
+  const closed = await runBrowserCloseCommand(sessionName, record, options.timeoutMs ?? BROWSER_CLOSE_TIMEOUT_MS)
+  activeBrowserSessions.delete(sessionName)
+  return closed
+}
+
+/**
+ * Close every browser session started by this process. Intended for shutdown.
+ *
+ * Only touches sessions in this process's registry, so a second Studio process
+ * sharing the same temp directory keeps its browsers. Use
+ * `sweepOrphanBrowserSessions` for daemons left behind by an earlier process.
+ */
+export async function closeAllBrowserSessions(
+  options: { timeoutMs?: number } = {},
+): Promise<BrowserTeardownSummary> {
+  return closeBrowserSessions(listActiveBrowserSessions(), options.timeoutMs ?? BROWSER_CLOSE_TIMEOUT_MS)
+}
+
+/**
+ * Close daemons whose socket directory is still on disk but which this process
+ * never started — the residue of a previous process that was SIGKILLed before
+ * it could clean up.
+ *
+ * Opt-in, because a socket directory alone cannot distinguish "leftover from a
+ * dead process" from "owned by another live process on the same machine".
+ */
+export async function sweepOrphanBrowserSessions(
+  options: { timeoutMs?: number } = {},
+): Promise<BrowserTeardownSummary> {
+  let orphans: string[] = []
+  try {
+    orphans = readdirSync(shortTempDir(), { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(BROWSER_SESSION_DIR_PREFIX))
+      .map(entry => entry.name.slice(BROWSER_SESSION_DIR_PREFIX.length))
+      .filter(name => BROWSER_SESSION_NAME_PATTERN.test(name) && !activeBrowserSessions.has(name))
+  } catch {
+    return { attempted: 0, closed: 0, failed: 0 }
+  }
+  return closeBrowserSessions(orphans, options.timeoutMs ?? BROWSER_CLOSE_TIMEOUT_MS)
+}
+
+async function closeBrowserSessions(sessionNames: string[], timeoutMs: number): Promise<BrowserTeardownSummary> {
+  const queue = [...sessionNames]
+  const summary: BrowserTeardownSummary = { attempted: queue.length, closed: 0, failed: 0 }
+  if (queue.length === 0) return summary
+
+  const workerCount = Math.min(BROWSER_CLOSE_CONCURRENCY, queue.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    for (;;) {
+      const sessionName = queue.shift()
+      if (!sessionName) return
+      const record = activeBrowserSessions.get(sessionName)
+      const closed = await runBrowserCloseCommand(sessionName, record, timeoutMs)
+      activeBrowserSessions.delete(sessionName)
+      if (closed) summary.closed += 1
+      else summary.failed += 1
+    }
+  }))
+  return summary
+}
+
+function runBrowserCloseCommand(
+  sessionName: string,
+  record: BrowserSessionRecord | undefined,
+  timeoutMs: number,
+): Promise<boolean> {
+  const resolved = resolveAgentBrowser()
+  if (!resolved) return Promise.resolve(false)
+
+  const socketDir = record?.socketDir || browserSocketDir(sessionName)
+  // Running the CLI against a session that has no daemon would *start* one, so
+  // a missing socket directory means there is nothing to close.
+  if (!existsSync(socketDir)) return Promise.resolve(false)
+
+  const args = [...resolved.args, '--session', sessionName, '--json', 'close']
+  const execution = browserCommandExecution(resolved, args)
+  const cwd = record?.cwd && existsSync(record.cwd) ? record.cwd : process.cwd()
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (closed: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      resolve(closed)
+    }
+
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(execution.command, execution.args, {
+        cwd,
+        env: browserEnv(socketDir),
+        shell: false,
+        windowsHide: true,
+        ...(execution.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+        stdio: 'ignore',
+      })
+    } catch {
+      finish(false)
+      return
+    }
+
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // Best-effort teardown only.
+      }
+      finish(false)
+    }, timeoutMs)
+    child.on('error', () => finish(false))
+    child.on('close', code => finish(code === 0))
+  })
+}
+
 async function runBrowserCommand(
   context: AgentToolContext,
   browserCommand: string,
@@ -400,6 +568,11 @@ async function runBrowserCommand(
   const timeoutMs = options.timeoutMs ?? context.timeoutMs ?? BROWSER_TOOL_TIMEOUT_MS
   const cwd = context.cwd || context.workspaceRoot || process.cwd()
   const env = browserEnv(socketDir)
+
+  // Remember the session before spawning: if this very command is the one that
+  // starts the daemon and then times out, the daemon still outlives us and we
+  // need to know it exists.
+  activeBrowserSessions.set(sessionName, { sessionName, socketDir, cwd, lastUsedAt: Date.now() })
 
   return new Promise<AgentToolResult>((resolve) => {
     const stdoutPath = path.join(socketDir, `_stdout_${browserCommand}_${Date.now()}`)
@@ -636,8 +809,24 @@ function findExecutable(name: string, searchPath: string): string | null {
 }
 
 function browserSessionName(context: AgentToolContext): string {
-  const raw = context.browserSessionId || context.sessionId || 'default'
+  return browserSessionNameFor(context.browserSessionId || context.sessionId || 'default')
+}
+
+function browserSessionNameFor(raw: string): string {
   return `e_${shortHash(raw)}`
+}
+
+/**
+ * Accept either a raw session id or an already-derived `e_<hash>` session name,
+ * preferring whichever this process actually has a daemon registered under.
+ */
+function resolveBrowserSessionName(sessionKey: string): string {
+  const key = String(sessionKey || '').trim()
+  if (!key) return browserSessionNameFor('default')
+  if (activeBrowserSessions.has(key)) return key
+  const derived = browserSessionNameFor(key)
+  if (activeBrowserSessions.has(derived)) return derived
+  return BROWSER_SESSION_NAME_PATTERN.test(key) ? key : derived
 }
 
 function browserSocketDir(sessionName: string): string {

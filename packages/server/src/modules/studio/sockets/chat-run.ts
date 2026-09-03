@@ -17,6 +17,7 @@ import { getSessionCategory } from '../repositories/session-category-store'
 import { getActiveProfileName, getProfileDir, listProfileNamesFromDisk } from '../public/profile-config'
 import {
   chatCodingAgentRunManager as codingAgentRunManager,
+  closeChatEkkoBrowserSession,
   createPrimaryAgentBridge,
   getChatEkkoAgent as getGlobalEkkoAgent,
   getPrimaryAgentBridgeManager as getAgentBridgeManager,
@@ -1966,7 +1967,29 @@ export class ChatRunSocket {
     state?.abortController?.abort()
     this.sessionMap.delete(sid)
     this.runWaiters.delete(sid)
+    this.releaseBrowserSession(sid)
     deleteSession(sid)
+  }
+
+  /**
+   * Tear down the agent-browser daemon (and its Chrome tree) bound to a session.
+   *
+   * Fire-and-forget on purpose: the caller is deleting or clearing a session and
+   * must not wait on a browser CLI, but nothing else will ever reclaim that
+   * daemon — it is not a child of this process and its own idle timer does not
+   * fire while a page keeps it busy.
+   */
+  private releaseBrowserSession(sessionId: string): void {
+    try {
+      void closeChatEkkoBrowserSession(sessionId)
+        .then((closed: boolean) => {
+          if (closed) logger.info('[chat-run-socket] closed agent-browser session for %s', sessionId)
+        })
+        .catch((err: unknown) => logger.warn(err, '[chat-run-socket] failed to close agent-browser session for %s', sessionId))
+    } catch (err) {
+      // Never let browser teardown break session deletion.
+      logger.warn(err, '[chat-run-socket] agent-browser teardown unavailable for %s', sessionId)
+    }
   }
 
   emitExternalEvent(sessionId: string, event: string, payload: any) {
@@ -2021,6 +2044,9 @@ export class ChatRunSocket {
     const state = this.sessionMap.get(sessionId)
     const hadMemoryState = Boolean(state)
     const messagePageLimit = state?.messagePageLimit
+    // A cleared session keeps no memory of what the browser was doing, so the
+    // page it left open is dead weight (~100 MB of Chrome per session).
+    this.releaseBrowserSession(sessionId)
     if (state) {
       state.abortController?.abort()
       if (state.isWorking && isBridgeRunSource(state.source)) {

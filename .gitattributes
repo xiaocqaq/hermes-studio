@@ -15,3 +15,12 @@
 # changes no repository content.
 *.ts text eol=lf
 *.vue text eol=lf
+
+# Markdown too, because of packages/ekko-agent/docs/API.md: the API-doc harness
+# (packages/ekko-agent/scripts/api-doc-harness.mjs) rebuilds the block between
+# its two HTML markers with \n and compares it byte-for-byte against the file.
+# A CRLF working copy makes every generated line differ, so api:docs:check fails
+# with "Public methods, fields, parameters, or exports changed" even when the
+# public API is untouched — and api:docs:update then leaves the file with mixed
+# endings.
+*.md text eol=lf

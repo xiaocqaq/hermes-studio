@@ -177,6 +177,21 @@ JavaScript 运行时也会为不与根字段冲突的 Profile 安装直接属性
 
 默认 registry 在由 `EkkoAgentSetup` 创建时还包含五个不依赖 Skill/持久数据库的恢复工具：`ekko_diagnostics`、`ekko_database_schema`、`ekko_repair_skills`、`ekko_repair_database`、`ekko_self_check`。Skills 修复使用打包源和 Ekko 所有权 manifest，不覆盖用户改过的同名 Skill；数据库 `retry` 原地运行代码 migrations，`rebuild` 必须显式 `confirmed=true`，并在重建前隔离原数据库族。每个修复内部都会执行目标自检，只有当前 incident revision 的自检通过后才清除活动故障。
 
+### 浏览器会话的归属与收尾
+
+`browser_*` 工具把会话按 `context.browserSessionId || context.sessionId` 哈希成 `e_<hash>`，同一 Session 的多轮对话复用同一棵浏览器，因此**不能在单次 run 结束时关闭**。
+
+真正的约束是 `agent-browser` 的守护进程**不是本进程的子进程**：我们 spawn 的 CLI 立刻退出，守护进程和整棵 Chrome 留在系统里，超时/abort 的 SIGTERM 只打到那个短命 CLI。除守护进程自己的 idle 计时（`AGENT_BROWSER_IDLE_TIMEOUT_MS`，本仓库默认 10 分钟，页面繁忙时不触发）之外，没有任何东西会回收它。模型侧也没有 `browser_close` 工具，收尾只能由宿主完成：
+
+| 函数 | 用途 |
+| --- | --- |
+| `closeBrowserSession(sessionKey)` | 关一个会话；接受原始 Session ID 或 `e_<hash>`。会话删除/清空时调用。 |
+| `closeAllBrowserSessions()` | 关本进程登记过的全部会话，用于 shutdown。 |
+| `sweepOrphanBrowserSessions()` | 关 socket 目录还在、但本进程没登记的守护进程（上一代进程被 SIGKILL 的残留）。同机存在第二个 Studio 进程时会误伤，故不默认调用。 |
+| `listActiveBrowserSessions()` | 当前登记的会话名，用于诊断和测试。 |
+
+三个关闭函数都是 best-effort：不抛异常，socket 目录不存在时直接返回（否则 CLI 会**新建**一个守护进程），失败也会把登记项丢掉——无限重试会拖死每一次 shutdown。宿主接入点见 `packages/server/src/bootstrap/lifecycle.ts` 与 `modules/studio/sockets/chat-run.ts` 的 `disposeSession`/`clearSessionHistory`。
+
 ## Profile `skill` 模块
 
 | 方法 | 参数 | 返回/说明 |
@@ -2943,6 +2958,16 @@ export class AgentBrowserTool implements AgentTool<BrowserToolInput> {
 export function createBrowserTools(): AgentTool[]
 
 export function isAgentBrowserAvailable(): boolean
+
+export type BrowserTeardownSummary = { attempted: number closed: number failed: number }
+
+export function listActiveBrowserSessions(): string[]
+
+export async function closeBrowserSession( sessionKey: string, options: { timeoutMs?: number } = {}, ): Promise<boolean>
+
+export async function closeAllBrowserSessions( options: { timeoutMs?: number } = {}, ): Promise<BrowserTeardownSummary>
+
+export async function sweepOrphanBrowserSessions( options: { timeoutMs?: number } = {}, ): Promise<BrowserTeardownSummary>
 ```
 ### `src/tools/clarify.ts`
 

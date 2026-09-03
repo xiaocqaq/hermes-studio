@@ -42,6 +42,12 @@ export interface ChatAgentRuntimeDependencies {
   createEkkoAuthorizedProviderFetch(...args: any[]): any
   respondToEkkoToolApproval(...args: any[]): any
   respondToEkkoClarification(...args: any[]): any
+  /**
+   * Close the agent-browser session bound to a chat session, tearing down its
+   * daemon and Chrome tree. The daemon is not a child of this process, so
+   * nothing else reclaims it when a session goes away.
+   */
+  closeEkkoBrowserSession(sessionKey: string): Promise<boolean>
 }
 
 let dependencies: ChatAgentRuntimeDependencies | null = null
@@ -97,3 +103,4 @@ export const resolveChatEkkoProviderRuntimeConfig = (...args: any[]) => configur
 export const createChatEkkoAuthorizedProviderFetch = (...args: any[]) => configured().createEkkoAuthorizedProviderFetch(...args)
 export const respondToChatEkkoToolApproval = (...args: any[]) => configured().respondToEkkoToolApproval(...args)
 export const respondToChatEkkoClarification = (...args: any[]) => configured().respondToEkkoClarification(...args)
+export const closeChatEkkoBrowserSession = (sessionKey: string) => configured().closeEkkoBrowserSession(sessionKey)

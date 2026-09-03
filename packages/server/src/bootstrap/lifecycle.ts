@@ -1,4 +1,5 @@
 import { codingAgentRunManager } from '../modules/coding-agents/services/runtime/run-manager'
+import { closeAllBrowserSessions } from '../../../ekko-agent/src'
 import { forceStopManagedGateways, shutdownManagedGateways } from '../modules/hermes/services/gateway/runner'
 import { closeDb } from '../modules/studio/infrastructure/database'
 import { logger } from '../modules/studio/public/logging'
@@ -145,6 +146,19 @@ export function createShutdownHandler(
         // watchers, exec jobs, and coding agents), so begin their teardown
         // before waiting on relays and network servers.
         await runShutdownStep('Coding agent hidden sessions', () => codingAgentRunManager.shutdown())
+
+        // agent-browser daemons are NOT our children: the CLI that starts one
+        // exits immediately and leaves the daemon plus a full Chrome tree
+        // behind, so nothing here would reap them. Their own idle timer is the
+        // only other reaper and it does not fire on a busy page. Left alone
+        // they accumulate at ~100 MB each until earlyoom starts shooting this
+        // service instead.
+        await runShutdownStep('Agent browser sessions', async () => {
+          const summary = await closeAllBrowserSessions()
+          if (summary.attempted > 0) {
+            logger.info('[shutdown] agent-browser sessions closed=%d failed=%d', summary.closed, summary.failed)
+          }
+        })
 
         for (const step of additionalSteps) {
           await runShutdownStep(step.name, step.close)

@@ -23,6 +23,7 @@ import {
 import { configureChatAgentRuntime } from '../modules/studio/public/chat-agent-runtime'
 import {
   agentReasoningText,
+  closeBrowserSession,
   createModelClient,
   DEFAULT_MODEL_REQUEST_TIMEOUT_MS,
   normalizeAgentReasoning,
@@ -55,4 +56,5 @@ configureChatAgentRuntime({
   createEkkoAuthorizedProviderFetch,
   respondToEkkoToolApproval,
   respondToEkkoClarification,
+  closeEkkoBrowserSession: closeBrowserSession,
 })
