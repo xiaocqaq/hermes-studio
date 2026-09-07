@@ -139,14 +139,42 @@ export async function fetchConfigModels(): Promise<ConfigModelsResponse> {
   return request<ConfigModelsResponse>('/api/hermes/config/models')
 }
 
+/**
+ * Providers the Web UI hides from model picks, model settings, and provider
+ * lists. Fork customization: OpenCode Free surfaces an empty/unreliable model
+ * catalog in the chat model picker, so we hide it on the client entirely.
+ * Keep in sync with the server-side `moa` filter in the models store.
+ */
+const HIDDEN_MODEL_PROVIDERS = new Set(['opencode-free'])
+
+/** Filter OpenCode Free out of an available-models response (groups, allProviders, profiles). */
+export function stripHiddenProviders(res: AvailableModelsResponse): AvailableModelsResponse {
+  const groupFilter = (g: AvailableModelGroup) => !HIDDEN_MODEL_PROVIDERS.has(g.provider)
+  return {
+    ...res,
+    groups: res.groups.filter(groupFilter),
+    allProviders: res.allProviders.filter(groupFilter),
+    ...(res.profiles
+      ? {
+          profiles: res.profiles.map(profile => ({
+            ...profile,
+            groups: profile.groups.filter(groupFilter),
+          })),
+        }
+      : {}),
+  }
+}
+
 export async function fetchAvailableModels(): Promise<AvailableModelsResponse> {
-  return request<AvailableModelsResponse>('/api/hermes/available-models')
+  const res = await request<AvailableModelsResponse>('/api/hermes/available-models')
+  return stripHiddenProviders(res)
 }
 
 export async function fetchAvailableModelsForProfile(profile: string): Promise<AvailableModelsResponse> {
   const params = new URLSearchParams()
   params.set('profile', profile || 'default')
-  return request<AvailableModelsResponse>(`/api/hermes/available-models?${params.toString()}`)
+  const res = await request<AvailableModelsResponse>(`/api/hermes/available-models?${params.toString()}`)
+  return stripHiddenProviders(res)
 }
 
 export async function fetchProviderModels(data: {
