@@ -76,6 +76,22 @@ set-studio-mcp-enabled.py hermes-studio-browser false && systemctl restart herme
 
 **⚠️ 升级会冲掉它。** `hermes_state.py` 属于 hermes-agent 包，`npm i -g` / pip 升级会整体替换该文件。`hermes-db-guard sweep` 每次跑都会检查补丁标记并自动重打，所以最坏情况是裸奔一个 sweep 周期（≤24h），不是永久失守。想立刻闭合就升级后跑 `install-db-guard.sh --patch-only`。
 
+### 1b. `patch-ekko-tool-timeout.py` — Ekko 聊天工具超时补丁
+
+**同样会被 `npm i -g hermes-web-ui` 冲掉**（它改的是 `dist/server/index.js`），所以并入 `install-db-guard.sh` 每次升级后重跑。
+
+背景：聊天生图（`image-gen` skill 跑 `studio-image-gen.mjs`）经由 `terminal_exec` 执行，而上游 `handle-ekko-agent-run.ts` 硬编码了 `toolContext.timeoutMs=120_000`，比 helper 自己的 10 分钟请求超时还短，于是 gpt-image-2 之类慢模型一冲到 120s 就被 SIGTERM，永远出不了图。
+
+补丁把唯一的那处（`mcpServers` + `timeoutMs` + `signal` 形状，不碰群聊 bridge 的另一处）改成从环境变量取：
+
+```text
+timeoutMs:12e4  →  timeoutMs:Number(process.env.EKKO_TOOL_TIMEOUT_MS)||6e5
+```
+
+默认 600000ms（10 分钟，和 helper / media 控制器默认一致）。调值：在 `/etc/hermes-webui.env` 写 `EKKO_TOOL_TIMEOUT_MS=900000` 后 `systemctl restart hermes-webui`。
+
+**仓库源码侧**：`packages/server/.../handle-ekko-agent-run.ts` 已改为读 Ekko `tools.executionTimeoutMs`（设置 → Tools），并把「拉取最新」并入会话菜单。上游若日后把这两处都修掉，本补丁（和 `--patch-only`）即可撤。
+
 ### 2. 6 小时只读体检 — `hermes-db-check.timer`
 
 01/07/13/19:43 跑 `quick_check`，不写盘。这次从坏到被发现隔了约 48 小时，中间多丢了一整天数据；这一层把发现窗口压到约 6 小时。

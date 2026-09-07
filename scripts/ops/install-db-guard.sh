@@ -45,7 +45,7 @@ while [ $# -gt 0 ]; do
 done
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-for f in patch-vacuum-guard.py hermes-db-guard.sh hermes-webui-watchdog.sh; do
+for f in patch-vacuum-guard.py patch-ekko-tool-timeout.py hermes-db-guard.sh hermes-webui-watchdog.sh; do
   [ -f "$HERE/$f" ] || { echo "missing $HERE/$f" >&2; exit 1; }
 done
 
@@ -61,6 +61,22 @@ ssh -o ConnectTimeout=20 "$DEPLOY_HOST" "
   python3 '$AGENT_DIR/.patch-vacuum-guard.py'
   grep -q HERMES_VACUUM_HOLDER_GUARD '$AGENT_DIR/hermes_state.py' \
     && echo '    guard: present' || { echo '    guard: MISSING'; exit 1; }
+"
+
+# ── 1b. the packaged Ekko chat tool timeout patch ──
+# AjUpgrade rewrites dist/server/index.js and drops the 120s-handcoded timeout;
+# this re-applies it so long-running image generation (gpt-image-2) is not
+# SIGTERM'd at 120s. Like --patch-only above, this is safe to re-run after each
+# `npm i -g hermes-web-ui` upgrade.
+echo "==> [1b] Ekko chat tool timeout patch"
+scp -q -o ConnectTimeout=20 "$HERE/patch-ekko-tool-timeout.py" \
+  "$DEPLOY_HOST:/usr/local/sbin/.patch-ekko-tool-timeout.py"
+ssh -o ConnectTimeout=20 "$DEPLOY_HOST" "
+  set -e
+  sed -i 's/\r\$//' /usr/local/sbin/.patch-ekko-tool-timeout.py
+  python3 /usr/local/sbin/.patch-ekko-tool-timeout.py
+  grep -q EKKO_TOOL_TIMEOUT_MS /usr/lib/node_modules/hermes-web-ui/dist/server/index.js \
+    && echo '    tool-timeout: present' || { echo '    tool-timeout: MISSING'; exit 1; }
 "
 
 if [ "$PATCH_ONLY" = "1" ]; then
