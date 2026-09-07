@@ -19,10 +19,14 @@ const agentEstimateContextMock = vi.hoisted(() => vi.fn(async () => ({ contextTo
 const agentSessionWorkspaceDirectoryMock = vi.hoisted(() => (
   vi.fn((sessionId: string) => `/tmp/ekko-workspace/default/${sessionId}`)
 ))
+const agentReadConfigMock = vi.hoisted(() => vi.fn(() => ({
+  tools: { executionTimeoutMs: 120_000 },
+})))
 const getGlobalEkkoAgentMock = vi.hoisted(() => vi.fn(() => ({
   run: agentRunMock,
   estimateContext: agentEstimateContextMock,
   sessionWorkspaceDirectory: agentSessionWorkspaceDirectoryMock,
+  readConfig: agentReadConfigMock,
 })))
 const buildCompressedHistoryMock = vi.hoisted(() => vi.fn())
 const recordSessionUsageMock = vi.hoisted(() => vi.fn())
@@ -1340,6 +1344,60 @@ describe('ekko-agent context usage events', () => {
         workspace,
       },
     })
+  })
+
+  // Image generation (gpt-image-2) runs as terminal_exec of studio-image-gen.mjs,
+  // whose own wait is 10 minutes. A hardcoded 120s toolContext.timeoutMs used to
+  // SIGTERM the child first, so long generations could never finish. The tool
+  // timeout must come from the Ekko tools.executionTimeoutMs setting.
+  it('takes the tool execution timeout from the Ekko tools config', async () => {
+    agentReadConfigMock.mockReturnValueOnce({ tools: { executionTimeoutMs: 600_000 } })
+    getSessionMock.mockReturnValueOnce(null)
+    agentRunMock.mockResolvedValueOnce({
+      runId: 'run-1',
+      output: { role: 'assistant', content: 'done', usage: { inputTokens: 3, outputTokens: 2 } },
+      steps: [],
+      messages: [],
+      events: [],
+      contextEstimate: { contextTokens: 12_000 },
+    })
+    const { handleEkkoAgentRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-ekko-agent-run')
+    const { nsp, socket, sessionMap } = makeHarness()
+
+    await handleEkkoAgentRun(nsp as any, socket as any, {
+      session_id: 'session-1',
+      input: 'draw a poster',
+      coding_agent_id: 'ekko-agent',
+    }, 'default', sessionMap, vi.fn(() => false))
+
+    expect(agentRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      toolContext: expect.objectContaining({ timeoutMs: 600_000 }),
+    }))
+  })
+
+  it('falls back to the 120s tool execution timeout when the Ekko config is unreadable', async () => {
+    agentReadConfigMock.mockImplementationOnce(() => { throw new Error('config unavailable') })
+    getSessionMock.mockReturnValueOnce(null)
+    agentRunMock.mockResolvedValueOnce({
+      runId: 'run-1',
+      output: { role: 'assistant', content: 'done', usage: { inputTokens: 3, outputTokens: 2 } },
+      steps: [],
+      messages: [],
+      events: [],
+      contextEstimate: { contextTokens: 12_000 },
+    })
+    const { handleEkkoAgentRun } = await import('../../packages/server/src/modules/studio/services/chat-run/handle-ekko-agent-run')
+    const { nsp, socket, sessionMap } = makeHarness()
+
+    await handleEkkoAgentRun(nsp as any, socket as any, {
+      session_id: 'session-1',
+      input: 'draw a poster',
+      coding_agent_id: 'ekko-agent',
+    }, 'default', sessionMap, vi.fn(() => false))
+
+    expect(agentRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      toolContext: expect.objectContaining({ timeoutMs: 120_000 }),
+    }))
   })
 
   it('loads and persists the configured API mode when the session and request omit it', async () => {

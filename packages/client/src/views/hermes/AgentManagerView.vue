@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
+import { getAgentUpdatePolicies, setAgentAutoUpdate, type AgentUpdatePolicyState } from '@/api/coding-agents'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import {
   checkCodingAgentUpdate,
   deleteCodingAgent,
@@ -76,8 +77,31 @@ const codingAgents: CodingAgentCard[] = [
     command: 'grok',
     packageName: '@xai-official/grok',
   },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    provider: 'OpenCode',
+    logo: '/coding-agents/opencode.png',
+    command: 'opencode',
+    packageName: 'opencode-ai',
+  },
 ]
 
+const updatePolicies = ref<Record<string, AgentUpdatePolicyState>>({})
+let policyTimer: ReturnType<typeof setInterval> | undefined
+async function refreshPolicies() {
+  try { updatePolicies.value = (await getAgentUpdatePolicies()).agents } catch { /* unavailable to non-admin/old server */ }
+}
+function availableUpdateVersion(id: CodingAgentId): string {
+  const policy = updatePolicies.value[id]
+  if (policy) return ['available','waiting'].includes(policy.status) ? policy.latestVersion : ''
+  return updateInfo.value[id]?.updateAvailable ? updateInfo.value[id]?.latestVersion || '' : ''
+}
+async function toggleAutoUpdate(id: CodingAgentId, enabled: boolean) {
+  try { updatePolicies.value = (await setAgentAutoUpdate(id, enabled)).agents } catch (error) { message.error(String(error)) }
+}
+onMounted(() => { void refreshPolicies(); policyTimer = setInterval(() => void refreshPolicies(), 15000) })
+onUnmounted(() => { if(policyTimer) clearInterval(policyTimer) })
 const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
@@ -97,14 +121,15 @@ const hermesRuntimeStatus = ref<RuntimeVersionStatus | null>(null)
 const aiHelpDrawerVisible = ref(false)
 const aiHelpPrompt = ref('')
 const legacyDataMigrationChecked = ref(false)
-const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
-const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
-const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false })
+const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
+const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
+const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false })
 const updateInfo = ref<Record<CodingAgentId, CodingAgentUpdateResult | null>>({
   'claude-code': null,
   codex: null,
   pi: null,
   grok: null,
+  opencode: null,
 })
 
 const hermesStatus = computed(() => agentStatusSnapshot.value?.agents.find(agent => agent.id === 'hermes'))
@@ -336,6 +361,7 @@ async function handleInstall(id: CodingAgentId) {
   try {
     const result = await installCodingAgent(id)
     tools.value = result.tools
+    if (result.updateState) updatePolicies.value[id] = result.updateState
     if (!result.success) throw new Error(result.message || t('codingAgents.installFailed'))
     updateInfo.value[id] = null
     message.success(t('codingAgents.installSuccess'))
@@ -480,6 +506,14 @@ onMounted(() => {
 
             <div class="agent-actions">
               <NButton
+                v-if="hermesDetected"
+                secondary
+                size="small"
+                @click="router.push({ name: 'hermes.configSettings' })"
+              >
+                {{ t('sidebar.settings') }}
+              </NButton>
+              <NButton
                 v-if="hermesDetected && hermesType === 'CLI'"
                 data-testid="view-hermes-cli-details"
                 secondary
@@ -497,14 +531,6 @@ onMounted(() => {
                 @click="runtimeManagerVisible = true"
               >
                 {{ hermesDetected ? t('agentManager.manageRuntime') : t('codingAgents.installNow') }}
-              </NButton>
-              <NButton
-                v-if="hermesDetected"
-                secondary
-                size="small"
-                @click="router.push({ name: 'hermes.configSettings' })"
-              >
-                {{ t('sidebar.settings') }}
               </NButton>
             </div>
           </section>
@@ -561,17 +587,17 @@ onMounted(() => {
                   {{ t('codingAgents.installNow') }}
                 </NButton>
                 <NButton
-                  v-else-if="updateInfo[agent.id]?.updateAvailable"
+                  v-else-if="availableUpdateVersion(agent.id)"
                   type="primary"
                   secondary
                   size="small"
                   :loading="installing[agent.id]"
                   @click="handleInstall(agent.id)"
                 >
-                  {{ t('agentManager.updateToVersion', { version: updateInfo[agent.id]?.latestVersion }) }}
+                  {{ t('agentManager.updateToVersion', { version: formatVersion(availableUpdateVersion(agent.id)) }) }}
                 </NButton>
                 <NButton
-                  v-if="toolStatus(agent.id)?.installed"
+                  v-if="toolStatus(agent.id)?.installed && !availableUpdateVersion(agent.id)"
                   secondary
                   size="small"
                   :loading="checkingUpdate[agent.id]"
@@ -580,6 +606,7 @@ onMounted(() => {
                 >
                   {{ t('codingAgents.checkUpdate') }}
                 </NButton>
+
                 <NPopconfirm
                   v-if="toolStatus(agent.id)?.installed"
                   @positive-click="handleDelete(agent.id)"
@@ -597,6 +624,11 @@ onMounted(() => {
                   </template>
                   {{ t('agentManager.deleteConfirm', { name: agent.name }) }}
                 </NPopconfirm>
+              </div>
+              <div v-if="toolStatus(agent.id)?.installed && updatePolicies[agent.id]" class="agent-update-policy">
+                <div class="agent-update-policy-row"><span>{{ t('agentAutoUpdate.label') }}</span><NSwitch class="agent-update-switch" size="small" :theme-overrides="{ railHeightSmall: '16px', railWidthSmall: '28px', buttonHeightSmall: '12px', buttonWidthSmall: '12px' }" :disabled="!updatePolicies[agent.id]?.autoUpdateSupported" :value="updatePolicies[agent.id]?.autoUpdate" @update:value="toggleAutoUpdate(agent.id, $event)" /></div>
+
+                <small v-if="updatePolicies[agent.id]?.error" class="agent-update-error">{{ t('codingAgents.checkUpdateFailed') }}</small>
               </div>
             </section>
           </div>
@@ -889,4 +921,11 @@ onMounted(() => {
   }
 
 }
+</style>
+
+<style scoped>
+.agent-update-policy { min-width: 0; width: 100%; box-sizing: border-box; padding-top: 10px; border-top: 1px solid var(--border-color, #eee); }
+.agent-update-policy-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; }
+.agent-update-policy small { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+.agent-update-error { color: #c44; }
 </style>

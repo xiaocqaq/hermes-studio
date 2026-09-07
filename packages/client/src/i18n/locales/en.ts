@@ -1,6 +1,7 @@
 import { socialMessagesEn } from '../social-messages'
 
 export default {
+  agentAutoUpdate: { label: 'Automatic updates' },
   ekkoConfig: {
     "settingsTitle": "Settings",
     "settingsRuntime": "Runtime",
@@ -12,7 +13,7 @@ export default {
     "authorized": "Authorized",
     "maxSteps": "Maximum tool rounds",
     "maxModelRetries": "Model retries",
-    "maxToolFailures": "Consecutive tool failure limit",
+    "maxToolFailures": "Same-tool failure recovery threshold",
     "backgroundDelegation": "Background delegation",
     "subtaskMaxSteps": "Subtask tool rounds",
     "defaultProvider": "Default provider",
@@ -49,7 +50,7 @@ export default {
     "featureToggleHint": "Controls whether this capability is available to Ekko.",
     "runLimitHint": "Caps work in a single run; execution stops when the limit is reached.",
     "retryLimitHint": "Maximum automatic retries after a model request fails.",
-    "failureLimitHint": "Stops the run after this many consecutive tool failures.",
+    "failureLimitHint": "After the same tool fails this many times in a row, asks the model to correct the call or use another approach; the run continues.",
     "timeoutHint": "Aborts the corresponding request or operation after this duration.",
     "modelParameterHint": "Sent with model requests to control response generation and reasoning.",
     "authorizationLeewayHint": "Refreshes authorization this long before it expires.",
@@ -577,6 +578,7 @@ export default {
       viewMessages: 'Message Push',
       downloadTitle: 'HStudio on your phone',
       downloadDescription: 'We are currently in closed beta. A registration code is required to sign up, and we will share a limited number of codes on our social media channels.',
+      downloadPaidDescription: 'The Hermes Studio App is now officially available as a paid product. To get started, visit the pricing and purchase page, choose the plan that suits you, and complete your purchase.',
       downloadScan: 'Scan with your phone',
       downloadScanHint: 'Android download available now',
       available: 'Available',
@@ -610,6 +612,7 @@ export default {
       accessFailureMode: 'Current mode: {mode}',
       accessFailureDeviceName: 'Device: {deviceName}',
       accessFailureTime: 'Failed at: {time}',
+      purchaseAccess: 'View plans',
       accessModes: {
         internal: 'Internal testing',
         public_beta: 'Public beta',
@@ -619,6 +622,8 @@ export default {
       accessFailures: {
         tokenExpired: 'Token expired',
         paidAccountRequired: 'The current account is not a paid account and cannot use this feature',
+        cloudSubscriptionRequired: 'This account does not have HStudio Cloud access',
+        appAccessExpired: 'This internal test or public beta access has expired',
         required: 'The App did not provide an access entitlement',
         invalid: 'The App access entitlement is invalid',
         expired: 'The App access entitlement has expired',
@@ -1010,7 +1015,10 @@ export default {
     uncategorized: 'Uncategorized',
     categoryPlaceholder: 'Select or create a category',
     categoryCreateHint: 'Select a category, or type a new name and press Enter to create it.',
+    createCategory: 'Create new category',
     categoryCreated: 'Category "{name}" created',
+    categoryCreatedAndMoved: 'Category "{name}" created and session moved',
+    categoryCreatedMoveFailed: 'Category "{name}" was created, but the session was not moved. Try again to move it.',
     categoryCreateFailed: 'Failed to create category',
     categoryLoadFailed: 'Failed to load categories',
     moveToCategory: 'Move to category',
@@ -1097,6 +1105,8 @@ export default {
     workspaceRecent: 'Recent',
     defaultWorkspace: 'Default Workspace',
     more: 'More',
+    sidePanel: 'Side panel',
+    sessionActions: 'Session actions',
     setWorkspace: 'Set Workspace',
     setWorkspaceTitle: 'Set Session Workspace',
     workspacePlaceholder: 'Enter project path, e.g. /home/user/project',
@@ -1831,6 +1841,10 @@ export default {
 
   // Models
   models: {
+    opencodeFreeHint: "No account or API key required. Free models may be rate limited.",
+    opencodeFreeLoading: "Loading free models in the background…",
+    opencodeFreeRetry: "Free provider check or catalog refresh failed. Retrying automatically; cached models are retained.",
+    opencodeFreeUpgrade: "Update Hermes Agent to use OpenCode Free.",
     title: 'Models',
     searchPlaceholder: 'Search models...',
     noResults: 'No results',
@@ -2425,7 +2439,11 @@ export default {
       themeDark: 'Dark',
       themeSystem: 'System',
       chatInputHeight: 'Chat input height',
-      chatInputHeightHint: 'Default desktop chat input height in pixels. Mobile keeps auto height.'
+      chatInputHeightHint: 'Default desktop chat input height in pixels. Mobile keeps auto height.',
+      linkOpenTarget: 'Open web links in',
+      linkOpenTargetHint: 'Choose where links from messages and Markdown previews open.',
+      linkOpenTargetHermesStudio: 'Hermes Studio',
+      linkOpenTargetDefaultBrowser: 'Default browser',
     },
     agent: {
       maxTurns: 'Max Turns',
@@ -2966,6 +2984,8 @@ export default {
     newVersionAvailable: "New version available",
     checkUpdateFailed: "Failed to check for update",
     configFiles: "Config files",
+    preference: "Preferences",
+    configuration: "Configuration",
     profileScope: "Profile",
     providerScope: "Provider",
     providerPlaceholder: "e.g. custom:glm",
@@ -3368,7 +3388,7 @@ export default {
     cacheHitRate: 'Cache Hit Rate',
     modelBreakdown: 'Model Breakdown',
     agentBreakdown: 'Agent Breakdown',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: 'Unknown' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', opencode: 'OpenCode', ekkoAgent: 'Ekko', unknown: 'Unknown' },
     dailyTrend: 'Daily Usage',
     date: 'Date',
     tokens: 'Tokens',
@@ -3485,6 +3505,23 @@ export default {
 
   // Changelog
   changelog: {
+    new_0_7_18_1: 'Added OpenCode as a Coding Agent with session resume, streamed tool calls, configuration, memory, Skills, workflows, and group chat support (#2890)',
+    new_0_7_18_2: 'Group chats now connect remote Agents through cloud relay, with improved streaming order, reconnection, summary restoration, shared image access, tool folding, and mobile layout (#2927)',
+    new_0_7_18_3: 'Added one-time mobile location, calendar, and reminder capabilities; sensitive actions require consent, deletion targets the confirmed item, and consent timeouts and request origins are validated (#2820, #2926)',
+    new_0_7_18_4: 'Unified session action menus, added category creation when moving sessions, preserved collapsed categories across refreshes, and added Ctrl/Cmd + , to open settings (#2887, #2896, #2910, #2912)',
+    new_0_7_18_5: 'Added previews for uploaded images before sending, code-styled local file links, and workspace Markdown; refined message references and restored the reply arrow (#2885, #2893, #2903, #2908)',
+    new_0_7_18_6: 'Runtime download polling now runs on demand for super admins; Windows extraction uses isolated directories and falls back to Node tar when system tar is unavailable, and Bridge MCP imports work with split Hermes Runtimes (#2925)',
+    new_0_7_18_7: 'Coding Agents now isolate failed MCP Runtimes and clean up removed servers; Studio-managed MCP launchers explicitly use Node mode to avoid opening extra Electron windows (#2888, #2920)',
+    new_0_7_18_8: 'Ekko now recovers from repeated tool failures with improved retry and failure handling (#2891)',
+    new_0_7_18_9: 'Fixed empty environment values consuming the next line, preventing incorrect model URLs and credentials (#2884)',
+    new_0_7_18_10: 'Added a purchase link to the app download page, shown according to the access mode in the version manifest (#2895)',
+    new_0_7_17_1: 'Coding Agent settings now give Claude, Codex, Pi, and Grok consistent navigation and full-height Preferences and Configuration editors, while Skills and MCP share the Studio card layout and controls (#2854, #2870, #2871)',
+    new_0_7_17_2: 'Grok now resumes failed turns, displays its effective Runtime configuration, and installs from the official npm registry; Codex installation also uses the official registry (#2855, #2857, #2868, #2881)',
+    new_0_7_17_3: 'Ekko now bounds oversized tool output, protects memory and workspace handling, and proxies MCP tool names that are unsafe for model providers (#2846, #2847, #2849)',
+    new_0_7_17_4: 'App connections now restore production relay endpoints, surface entitlement failures, provide purchase links, and localize connection errors (#2872, #2873, #2874)',
+    new_0_7_17_5: 'Profile avatars now use deterministic Boring Avatars instead of generated assets, keeping identities consistent without bundled image files (#2875)',
+    new_0_7_17_6: 'Quitting from the Desktop tray now cancels pending relaunches, and handled Runtime restart prompts remain dismissed across refreshes (#2842, #2852)',
+    new_0_7_17_7: 'Mobile channels now report versions correctly, TTS restores the active provider at startup, and Skills safely handle reserved URL characters (#2839, #2843, #2845)',
     new_0_7_16_1: 'Desktop now handles Runtime restart requests from its bundled Web UI through Electron, using a clean relaunch with duplicate protection while standalone Web UI restarts continue to work (#2827)',
     new_0_7_16_2: 'Workflows and group chats can now launch Claude, Codex, and Pi Agents in scoped or global mode; global runs keep Studio-managed prompts and environments isolated while preserving user configuration (#2828)',
     new_0_7_16_3: 'Grok CLI is now a first-class Coding Agent with scoped proxy models, isolated global mode, native session resume, usage tracking, Skills, workflows, and group chat support (#2832)',

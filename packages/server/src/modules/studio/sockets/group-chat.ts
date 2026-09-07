@@ -228,7 +228,7 @@ interface RoomAgent {
     id: string
     roomId: string
     agentId: string
-    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
     agentMode: 'scoped' | 'global'
     profile: string
     provider: string
@@ -257,7 +257,7 @@ interface GroupAgentActivity {
 }
 
 interface RoomAgentMetadata {
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode'
     agentMode?: 'scoped' | 'global'
     provider?: string
     model?: string
@@ -4346,6 +4346,7 @@ export class GroupChatServer {
             historyTruncated,
             typingUsers: this.getTypingUsers(roomId),
             contextStatuses: this.getContextStatuses(roomId),
+            roomSummary: this.roomSummaryService.getState(roomId),
             executionQueue: this.executionQueueSnapshot(roomId),
             pendingApprovals: this.pendingApprovalSnapshots(roomId, socket),
             pendingClarifies: this.canSocketManageRoom(socket, roomId) ? this.pendingClarifySnapshots(roomId) : [],

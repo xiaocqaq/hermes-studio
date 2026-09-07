@@ -9,6 +9,9 @@ const api = vi.hoisted(() => ({
 const desktop = vi.hoisted(() => ({
   bridge: null as null | { isDesktop: boolean; restartApp?: ReturnType<typeof vi.fn> },
 }))
+const auth = vi.hoisted(() => ({ isStoredSuperAdmin: vi.fn(() => true) }))
+vi.mock('@/api/client', () => auth)
+
 const message = vi.hoisted(() => ({ error: vi.fn() }))
 
 vi.mock('@/api/hermes/runtime-versions', () => api)
@@ -60,6 +63,7 @@ function jwtForRole(role: 'super_admin' | 'admin'): string {
 describe('RuntimeRestartPrompt', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    auth.isStoredSuperAdmin.mockReturnValue(true)
     sessionStorage.clear()
     localStorage.clear()
     // The jobs endpoint is requireSuperAdmin, so the prompt only polls for a
@@ -118,31 +122,6 @@ describe('RuntimeRestartPrompt', () => {
     wrapper.unmount()
   })
 
-  // Regression: GET /api/hermes/runtime-versions/jobs is requireSuperAdmin, and the
-  // shared request helper turns every local-BFF 403 into an "access denied" toast.
-  // Polling it every 2s as a plain admin papered the whole UI with that toast.
-  it('never polls the super-admin jobs endpoint for a plain admin', async () => {
-    localStorage.setItem('hermes_api_key', jwtForRole('admin'))
-    const wrapper = mount(RuntimeRestartPrompt)
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(10_000)
-    await flushPromises()
-
-    expect(api.fetchVersionDownloadJobs).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(false)
-    wrapper.unmount()
-  })
-
-  it('does not poll when no session token is stored', async () => {
-    localStorage.clear()
-    const wrapper = mount(RuntimeRestartPrompt)
-    await flushPromises()
-    await vi.advanceTimersByTimeAsync(10_000)
-
-    expect(api.fetchVersionDownloadJobs).not.toHaveBeenCalled()
-    wrapper.unmount()
-  })
-
   it('keeps handled Runtime downloads suppressed after an app relaunch', async () => {
     const first = mount(RuntimeRestartPrompt)
     await flushPromises()
@@ -160,4 +139,90 @@ describe('RuntimeRestartPrompt', () => {
     expect(api.restartWebUiAfterRuntimeChange).not.toHaveBeenCalled()
     second.unmount()
   })
+
+  it('never queries jobs for an ordinary administrator, even after a download notification', async () => {
+    auth.isStoredSuperAdmin.mockReturnValue(false)
+    const wrapper = mount(RuntimeRestartPrompt)
+    useRuntimeRestartPrompt().checkRuntimeDownloads()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.fetchVersionDownloadJobs).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('checks once on mount and stays idle when no Runtime download is active', async () => {
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [] })
+    const wrapper = mount(RuntimeRestartPrompt)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it.each(['completed', 'failed'])('resumes on a new download and stops when it is %s', async (status) => {
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [] })
+    const wrapper = mount(RuntimeRestartPrompt)
+    await flushPromises()
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [{ ...completedRuntimeJob(), status: 'running' }] })
+    useRuntimeRestartPrompt().checkRuntimeDownloads()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(3)
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [{ ...completedRuntimeJob(), status }] })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(status === 'completed')
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(4)
+    wrapper.unmount()
+  })
+
+  it('restores a queued download after a page reload', async () => {
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [{ ...completedRuntimeJob(), status: 'queued' }] })
+    const wrapper = mount(RuntimeRestartPrompt)
+    await flushPromises()
+    api.fetchVersionDownloadJobs.mockResolvedValue({ jobs: [completedRuntimeJob()] })
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(wrapper.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('stops after a forbidden response instead of repeatedly triggering permission errors', async () => {
+    api.fetchVersionDownloadJobs.mockResolvedValueOnce({ jobs: [{ ...completedRuntimeJob(), status: 'running' }] })
+    api.fetchVersionDownloadJobs.mockRejectedValue(Object.assign(new Error('Forbidden'), { status: 403 }))
+    const wrapper = mount(RuntimeRestartPrompt)
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('does not overlap slow requests and rechecks a download started during an in-flight check', async () => {
+    let resolve!: (value: { jobs: ReturnType<typeof completedRuntimeJob>[] }) => void
+    api.fetchVersionDownloadJobs.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = mount(RuntimeRestartPrompt)
+    await flushPromises()
+    useRuntimeRestartPrompt().checkRuntimeDownloads()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(1)
+    resolve({ jobs: [] })
+    await flushPromises()
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="runtime-restart-prompt"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('ignores a response received after unmounting', async () => {
+    let resolve!: (value: { jobs: ReturnType<typeof completedRuntimeJob>[] }) => void
+    api.fetchVersionDownloadJobs.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    const wrapper = mount(RuntimeRestartPrompt)
+    wrapper.unmount()
+    resolve({ jobs: [completedRuntimeJob()] })
+    await flushPromises()
+    expect(useRuntimeRestartPrompt().pendingRuntimeRestart.value).toBeNull()
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(api.fetchVersionDownloadJobs).toHaveBeenCalledTimes(1)
+  })
+
 })

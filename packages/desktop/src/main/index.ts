@@ -14,6 +14,7 @@ import {
   type MessageBoxOptions,
   type OpenDialogOptions,
   type IpcMainInvokeEvent,
+  type WebContents,
 } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,6 +33,7 @@ import { installHermesStudioCliShim, installHermesStudioMcpShim } from './cli-sh
 import { parseHermesCliArgs, runBundledHermesCli } from './hermes-cli'
 import { installSelectionContextMenu } from './selection-context-menu'
 import { groupChatAgentLinkPopupResponse } from './group-chat-agent-popup'
+import { isTrustedDesktopAppUrl, normalizeExternalHttpUrl } from './window-open-policy'
 import {
   ensureDesktopRuntime,
   isDesktopRuntimeReady,
@@ -45,6 +47,7 @@ import { BrowserManager } from './browser/browser-manager'
 import { BrowserBroker } from './browser/browser-broker'
 import type { BrowserBounds } from './browser/browser-types'
 import { migratePendingLegacyWindowsData } from './legacy-windows-data-migration'
+import { createDesktopAppLifecycle } from './app-lifecycle'
 
 const PORT = Number(process.env.HERMES_DESKTOP_PORT) || 8748
 const START_HIDDEN = process.argv.includes('--hidden')
@@ -69,7 +72,6 @@ let petWindowLoadPromise: Promise<void> | null = null
 const chatWindows = new Map<string, BrowserWindow>()
 let serverUrl: string | null = null
 let tray: Tray | null = null
-let isQuitting = false
 let appShutdownPromise: Promise<void> | null = null
 let isBootstrapping = false
 let isResettingLogin = false
@@ -81,7 +83,7 @@ let unexpectedWebUiExitCount = 0
 let unexpectedWebUiExitWindowStartedAt = 0
 let rendererRecoveryCount = 0
 let rendererRecoveryWindowStartedAt = 0
-let appRestartScheduled = false
+const appLifecycle = createDesktopAppLifecycle(app)
 
 // Custom Session paths do not need Chromium's optional compression-dictionary
 // disk cache; disabling it leaves the normal HTTP cache enabled and isolated.
@@ -142,23 +144,15 @@ function showMainWindow() {
 }
 
 function quitApp() {
-  isQuitting = true
-  app.quit()
+  appLifecycle.quit()
 }
 
 function scheduleAppRestart(delayMs = 100): boolean {
-  if (appRestartScheduled) return true
-  if (isQuitting) return false
-  appRestartScheduled = true
-  setTimeout(() => {
-    app.relaunch()
-    quitApp()
-  }, delayMs).unref?.()
-  return true
+  return appLifecycle.scheduleRestart(delayMs)
 }
 
 async function prepareAppShutdown(): Promise<void> {
-  isQuitting = true
+  appLifecycle.prepareShutdown()
   if (!appShutdownPromise) {
     appShutdownPromise = (async () => {
       cancelWindowFade()
@@ -266,7 +260,7 @@ function ensurePetWindow(): BrowserWindow {
     petWindowLoadPromise = null
   })
   petWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+    if (isTrustedDesktopAppUrl(url, serverUrl)) {
       return { action: 'allow' }
     }
     shell.openExternal(url).catch(() => undefined)
@@ -521,7 +515,7 @@ async function createWindow(): Promise<void> {
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    if (isQuitting || !mainWindow || mainWindow.isDestroyed()) return
+    if (appLifecycle.isQuitting || !mainWindow || mainWindow.isDestroyed()) return
     console.error(`[desktop] main renderer exited reason=${details.reason} code=${details.exitCode}`)
     const now = Date.now()
     if (now - rendererRecoveryWindowStartedAt > FAILURE_RECOVERY_WINDOW_MS) {
@@ -534,13 +528,13 @@ async function createWindow(): Promise<void> {
       return
     }
     setTimeout(() => {
-      if (!mainWindow || mainWindow.isDestroyed() || isQuitting) return
+      if (!mainWindow || mainWindow.isDestroyed() || appLifecycle.isQuitting) return
       mainWindow.reload()
     }, 250).unref?.()
   })
 
   mainWindow.on('close', (event) => {
-    if (isQuitting) return
+    if (appLifecycle.isQuitting) return
     event.preventDefault()
     cancelWindowFade()
     mainWindow?.hide()
@@ -559,7 +553,7 @@ async function createWindow(): Promise<void> {
   mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
     const agentLinkPopup = groupChatAgentLinkPopupResponse(url, frameName)
     if (agentLinkPopup) return agentLinkPopup
-    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+    if (isTrustedDesktopAppUrl(url, serverUrl)) {
       return { action: 'allow' }
     }
     shell.openExternal(url).catch(() => undefined)
@@ -1015,7 +1009,7 @@ async function loadServiceFailurePage(error: unknown): Promise<void> {
 }
 
 async function recoverUnexpectedWebUiExit(details: { code: number | null; signal: NodeJS.Signals | null }): Promise<void> {
-  if (isQuitting) return
+  if (appLifecycle.isQuitting) return
   serverUrl = null
   updateTrayMenu()
 
@@ -1049,6 +1043,26 @@ ipcMain.handle('hermes-desktop:open-chat-window', (event, sessionId?: unknown, p
     throw new Error('Chat windows can only be opened from the main window')
   }
   return openChatWindow(sessionId, profile)
+})
+
+function isTrustedDesktopWindowSender(sender: WebContents): boolean {
+  const windows = [mainWindow, petWindow, ...chatWindows.values()]
+  return windows.some(window => window && !window.isDestroyed() && window.webContents === sender)
+}
+
+ipcMain.handle('hermes-desktop:open-external-url', async (event, url?: unknown) => {
+  if (!isTrustedDesktopWindowSender(event.sender)) {
+    throw new Error('External URLs can only be opened from a Hermes desktop window')
+  }
+  const externalUrl = normalizeExternalHttpUrl(url)
+  if (!externalUrl) return false
+
+  try {
+    await shell.openExternal(externalUrl)
+    return true
+  } catch {
+    return false
+  }
 })
 
 function browserForEvent(event: IpcMainInvokeEvent): BrowserManager {
@@ -1276,7 +1290,7 @@ function runDesktopApp() {
   })
   const gotLock = app.requestSingleInstanceLock(QUIT_EXISTING ? { quit: true } : undefined)
   if (!gotLock) {
-    app.quit()
+    quitApp()
     return
   }
 
@@ -1317,15 +1331,15 @@ function runDesktopApp() {
   }).catch(error => {
     console.error('[desktop] failed during Electron startup:', error)
     dialog.showErrorBox('Hermes Studio', String(error instanceof Error ? error.message : error))
-    app.quit()
+    quitApp()
   })
 
   app.on('window-all-closed', () => {
-    if (isQuitting && process.platform !== 'darwin') app.quit()
+    if (appLifecycle.isQuitting && process.platform !== 'darwin') app.quit()
   })
 
   app.on('before-quit', async (e) => {
-    if (!isQuitting && process.platform !== 'darwin') {
+    if (!appLifecycle.isQuitting && process.platform !== 'darwin') {
       e.preventDefault()
       mainWindow?.hide()
       updateTrayMenu()
@@ -1335,7 +1349,7 @@ function runDesktopApp() {
     try {
       await prepareAppShutdown()
     } finally {
-      app.exit(0)
+      appLifecycle.finalizeExit(0)
     }
   })
 }

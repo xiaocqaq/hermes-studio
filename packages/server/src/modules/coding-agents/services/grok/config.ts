@@ -55,7 +55,7 @@ function mcpServerName(header: string): string {
   return String(match?.[1] || match?.[2] || '').trim()
 }
 
-export function stripManagedGrokMcp(content: string): string {
+function grokConfigBlocks(content: string): string[][] {
   const blocks: string[][] = []
   let current: string[] = []
   for (const line of String(content || '').split(/\r?\n/)) {
@@ -66,17 +66,108 @@ export function stripManagedGrokMcp(content: string): string {
     current.push(line)
   }
   if (current.length > 0) blocks.push(current)
-
   return blocks
+}
+
+function joinGrokConfigBlocks(blocks: string[][]): string {
+  return blocks
+    .map(block => block.join('\n').trimEnd())
+    .filter(block => block.trim())
+    .join('\n\n')
+    .trim()
+}
+
+function isManagedMcpBlock(block: string[]): boolean {
+  const name = mcpServerName(block[0] || '')
+  return Boolean(name) && (
+    MANAGED_MCP_NAMES.has(name) ||
+    block.join('\n').includes(MANAGED_MCP_MARKER)
+  )
+}
+
+export function grokSettingsConfig(content: string): string {
+  const value = joinGrokConfigBlocks(
+    grokConfigBlocks(content).filter(block => !mcpServerName(block[0] || '')),
+  )
+  return value ? `${value}\n` : ''
+}
+
+export function grokRuntimeSettingsConfig(...contents: Array<string | null | undefined>): string {
+  const topLevel = new Map<string, string>()
+  const sections = new Map<string, string[]>()
+  const runtimeKeys = new Set([
+    'model',
+    'default',
+    'default_reasoning_effort',
+    'context_window',
+    'max_completion_tokens',
+    'api_key',
+    'access_token',
+    'refresh_token',
+    'auth_token',
+  ])
+
+  for (const content of contents) {
+    let section = ''
+    for (const line of String(content || '').split(/\r?\n/)) {
+      const header = line.match(/^\s*\[([^\]]+)\]\s*$/)
+      if (header) {
+        section = header[1].trim()
+        continue
+      }
+      const assignment = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=/)
+      if (!section) {
+        if (assignment && !runtimeKeys.has(assignment[1])) topLevel.set(assignment[1], line)
+        continue
+      }
+      if (
+        section === 'models'
+        || section.startsWith('model.')
+        || section.startsWith('mcp_servers.')
+        || section === 'auth'
+        || section.startsWith('auth.')
+        || section === 'account'
+        || section.startsWith('account.')
+      ) continue
+      const lines = sections.get(section) || []
+      if (line.trim()) lines.push(line)
+      sections.set(section, lines)
+    }
+  }
+
+  const blocks = [...topLevel.values()]
+  for (const [section, lines] of sections) {
+    if (lines.length) blocks.push(`[${section}]\n${lines.join('\n')}`)
+  }
+  return blocks.join('\n\n')
+}
+
+export function grokUserMcpConfig(content: string): string {
+  const value = joinGrokConfigBlocks(
+    grokConfigBlocks(content).filter(block => (
+      Boolean(mcpServerName(block[0] || '')) && !isManagedMcpBlock(block)
+    )),
+  )
+  return value ? `${value}\n` : ''
+}
+
+export function stripManagedGrokMcp(content: string): string {
+  return joinGrokConfigBlocks(grokConfigBlocks(content)
     .filter((block) => {
       const name = mcpServerName(block[0] || '')
       if (!name) return true
-      return !MANAGED_MCP_NAMES.has(name) && !block.join('\n').includes(MANAGED_MCP_MARKER)
-    })
-    .map(block => block.join('\n').trimEnd())
-    .filter(Boolean)
-    .join('\n\n')
-    .trim()
+      return !isManagedMcpBlock(block)
+    }))
+}
+
+export function mergeGrokSettingsConfig(existingContent: string, settingsContent: string): string {
+  return [grokSettingsConfig(settingsContent).trim(), grokUserMcpConfig(existingContent).trim()]
+    .filter(Boolean).join('\n\n').concat('\n')
+}
+
+export function mergeGrokUserMcpConfig(existingContent: string, mcpContent: string): string {
+  return [grokSettingsConfig(existingContent).trim(), grokUserMcpConfig(mcpContent).trim()]
+    .filter(Boolean).join('\n\n').concat('\n')
 }
 
 export function mergeGrokConfigWithManagedMcp(content: string, managedMcpToml: string): string {
@@ -95,6 +186,18 @@ async function copyGlobalDirectory(source: string, target: string): Promise<void
     force: false,
     preserveTimestamps: true,
   })
+}
+
+async function syncSkillsDirectory(source: string, target: string): Promise<void> {
+  if (!existsSync(source)) return
+  await cp(source, target, {
+    recursive: true, dereference: true, errorOnExist: false, force: true, preserveTimestamps: true,
+  })
+}
+
+async function syncGlobalSkillsDirectories(sourceHome: string, rootDir: string): Promise<void> {
+  await syncSkillsDirectory(join(sourceHome, 'skills'), join(rootDir, 'skills'))
+  await syncSkillsDirectory(join(sourceHome, '..', '.agents', 'skills'), join(rootDir, 'skills'))
 }
 
 function shouldCopyGlobalFile(name: string): boolean {
@@ -123,6 +226,7 @@ export async function prepareGlobalGrokRuntime(input: {
       }
     }
   }
+  await syncGlobalSkillsDirectories(input.sourceHome, input.rootDir)
 
   const configPath = join(input.rootDir, 'config.toml')
   const promptFile = join(input.rootDir, 'AGENTS.md')
@@ -168,6 +272,7 @@ export function scopedGrokIdentityPrompt(provider: string, model: string): strin
 }
 
 export async function prepareScopedGrokRuntime(input: {
+  sourceHome?: string
   rootDir: string
   provider: string
   model: string
@@ -178,12 +283,15 @@ export async function prepareScopedGrokRuntime(input: {
   reasoningEffort: string
   systemPrompt: string
   userInstructions: string
+  settingsContent?: string
   managedMcpToml: string
 }): Promise<GrokRuntimeFiles> {
   await mkdir(input.rootDir, { recursive: true, mode: 0o700 })
+  if (input.sourceHome) await syncGlobalSkillsDirectories(input.sourceHome, input.rootDir)
   const configPath = join(input.rootDir, 'config.toml')
   const promptFile = join(input.rootDir, 'AGENTS.md')
   const config = [
+    grokRuntimeSettingsConfig(input.settingsContent),
     '[models]',
     `default = ${tomlString(GROK_PROVIDER_ID)}`,
     ...(input.reasoningEffort ? [`default_reasoning_effort = ${tomlString(input.reasoningEffort)}`] : []),

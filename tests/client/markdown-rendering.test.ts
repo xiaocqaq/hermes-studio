@@ -17,8 +17,23 @@ const downloadApiMock = vi.hoisted(() => ({
 }))
 
 const desktopBrowserMock = vi.hoisted(() => ({
-  openUrlInDesktopBrowser: vi.fn(() => Promise.resolve(false)),
+  openUrlInDesktopBrowser: vi.fn((_url: string) => Promise.resolve(false)),
 }))
+
+function trustedDesktopBrowserBridge() {
+  const createTab = vi.fn().mockResolvedValue({ id: 'web-tab' })
+  const methods = [
+    'getState', 'setViewport', 'closeTab', 'activateTab', 'navigate',
+    'navigationAction', 'createProfile', 'chooseProfileRootDirectory', 'renameProfile', 'profileSwitchImpact',
+    'switchProfile', 'updateProfile', 'deleteProfile', 'clearProfileData', 'cancelDownload',
+    'takeOver', 'annotate', 'cancelAnnotation', 'updateAnnotationNote',
+    'captureAnnotations', 'clearAnnotations', 'onAnnotationRequest', 'onStateChange',
+  ]
+  return {
+    ...Object.fromEntries(methods.map(method => [method, vi.fn()])),
+    createTab,
+  }
+}
 
 vi.mock('mermaid', () => ({
   default: mermaidMock,
@@ -79,11 +94,36 @@ vi.mock('@/api/studio/download', async (importOriginal) => {
 import MarkdownRenderer from '@/components/hermes/chat/MarkdownRenderer.vue'
 
 describe('MarkdownRenderer', () => {
+  it('waits for the final group message before requesting its published image', async () => {
+    const resolver = vi.fn(() => '/api/studio/group-chat/invites/ROOM1/attachments/answer.png')
+    const wrapper = mount(MarkdownRenderer, { props: {
+      content: '![answer](/workspace/answer.png)', deferImages: true, resolveImageUrl: resolver,
+    } })
+    expect(wrapper.find('img').exists()).toBe(false)
+    expect(resolver).not.toHaveBeenCalled()
+    await wrapper.setProps({ deferImages: false })
+    expect(wrapper.get('img').attributes('src')).toBe('/api/studio/group-chat/invites/ROOM1/attachments/answer.png')
+    wrapper.unmount()
+  })
+  it('uses the group image resolver for local images while leaving public images alone', () => {
+    const resolveImageUrl = vi.fn(path => `/api/studio/group-chat/invites/ROOM1/attachments/${encodeURIComponent(path.split('/').pop())}`)
+    const wrapper = mount(MarkdownRenderer, { props: {
+      content: '![图片](</workspace/马年 image.png>)\n\n![public](https://example.com/photo.png)', resolveImageUrl,
+    } })
+    const images = wrapper.findAll('img')
+    expect(images[0].attributes('src')).toBe('/api/studio/group-chat/invites/ROOM1/attachments/%E9%A9%AC%E5%B9%B4%20image.png')
+    expect(images[1].attributes('src')).toBe('https://example.com/photo.png')
+    expect(resolveImageUrl).toHaveBeenCalledWith('/workspace/马年 image.png')
+    expect(downloadApiMock.getDownloadUrl).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
   afterEach(() => {
     vi.useRealTimers()
   })
 
   beforeEach(() => {
+    window.localStorage.clear()
+    delete (window as typeof window & { hermesDesktop?: unknown }).hermesDesktop
     mermaidMock.initialize.mockClear()
     mermaidMock.render.mockClear()
     downloadApiMock.downloadFile.mockClear()
@@ -120,6 +160,46 @@ describe('MarkdownRenderer', () => {
     expect(wrapper.get('.markdown-body').text()).toBe(`Men's "quoted" – … ©`)
   })
 
+  it('cancels native message-link navigation before desktop routing begins', () => {
+    desktopBrowserMock.openUrlInDesktopBrowser.mockResolvedValue(true)
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[Hermes](https://example.com/docs)',
+      },
+    })
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    wrapper.get('a').element.dispatchEvent(click)
+
+    expect(click.defaultPrevented).toBe(true)
+  })
+
+  it('applies desktop routing to case-insensitive HTTP schemes', async () => {
+    desktopBrowserMock.openUrlInDesktopBrowser.mockResolvedValue(true)
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[Hermes](HTTPS://example.com/docs)',
+      },
+    })
+
+    await wrapper.get('a').trigger('click')
+
+    expect(desktopBrowserMock.openUrlInDesktopBrowser).toHaveBeenCalledWith('HTTPS://example.com/docs')
+  })
+
+  it('routes scheme-relative web links instead of treating them as local files', async () => {
+    desktopBrowserMock.openUrlInDesktopBrowser.mockResolvedValue(true)
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[Hermes](//example.com/docs)',
+      },
+    })
+
+    await wrapper.get('a').trigger('click')
+
+    expect(desktopBrowserMock.openUrlInDesktopBrowser).toHaveBeenCalledWith(`${window.location.protocol}//example.com/docs`)
+  })
+
   it('opens message links in the embedded browser when the desktop bridge is available', async () => {
     desktopBrowserMock.openUrlInDesktopBrowser.mockResolvedValue(true)
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
@@ -149,6 +229,106 @@ describe('MarkdownRenderer', () => {
     expect(desktopBrowserMock.openUrlInDesktopBrowser).toHaveBeenCalledWith('https://example.com/docs')
     expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer')
     open.mockRestore()
+  })
+
+  it('uses the stored default-browser preference for a rendered message link', async () => {
+    window.localStorage.setItem('hermes_link_open_target', 'default-browser')
+    const browser = trustedDesktopBrowserBridge()
+    ;(window as typeof window & { hermesDesktop?: unknown }).hermesDesktop = { isDesktop: true, browser }
+    desktopBrowserMock.openUrlInDesktopBrowser.mockImplementation(async (url: string) => {
+      const actual = await vi.importActual<{
+        openUrlInDesktopBrowser: (targetUrl: string) => Promise<boolean>
+      }>('@/utils/desktop-browser')
+      return actual.openUrlInDesktopBrowser(url)
+    })
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[Hermes](https://example.com/docs)',
+      },
+    })
+
+    try {
+      await wrapper.get('a').trigger('click')
+
+      expect(desktopBrowserMock.openUrlInDesktopBrowser).toHaveBeenCalledWith('https://example.com/docs')
+      expect(browser.createTab).not.toHaveBeenCalled()
+      await vi.waitFor(() => {
+        expect(open).toHaveBeenCalledWith('https://example.com/docs', '_blank', 'noopener,noreferrer')
+      })
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('uses desktop external-url IPC for same-origin links with the default-browser target', async () => {
+    window.localStorage.setItem('hermes_link_open_target', 'default-browser')
+    const browser = trustedDesktopBrowserBridge()
+    const openExternalUrl = vi.fn().mockResolvedValue(true)
+    ;(window as typeof window & { hermesDesktop?: unknown }).hermesDesktop = {
+      isDesktop: true,
+      browser,
+      openExternalUrl,
+    }
+    desktopBrowserMock.openUrlInDesktopBrowser.mockImplementation(async (url: string) => {
+      const actual = await vi.importActual<{
+        openUrlInDesktopBrowser: (targetUrl: string) => Promise<boolean>
+      }>('@/utils/desktop-browser')
+      return actual.openUrlInDesktopBrowser(url)
+    })
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const sameOriginUrl = `${window.location.origin}/docs`
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: `[Docs](${sameOriginUrl})`,
+      },
+    })
+
+    try {
+      await wrapper.get('a').trigger('click')
+
+      await vi.waitFor(() => {
+        expect(openExternalUrl).toHaveBeenCalledWith(sameOriginUrl)
+      })
+      expect(open).not.toHaveBeenCalled()
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('does not fall back to window.open when desktop default-browser IPC fails', async () => {
+    window.localStorage.setItem('hermes_link_open_target', 'default-browser')
+    const browser = trustedDesktopBrowserBridge()
+    const openExternalUrl = vi.fn().mockResolvedValue(false)
+    ;(window as typeof window & { hermesDesktop?: unknown }).hermesDesktop = {
+      isDesktop: true,
+      browser,
+      openExternalUrl,
+    }
+    desktopBrowserMock.openUrlInDesktopBrowser.mockImplementation(async (url: string) => {
+      const actual = await vi.importActual<{
+        openUrlInDesktopBrowser: (targetUrl: string) => Promise<boolean>
+      }>('@/utils/desktop-browser')
+      return actual.openUrlInDesktopBrowser(url)
+    })
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const sameOriginUrl = `${window.location.origin}/docs`
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: `[Docs](${sameOriginUrl})`,
+      },
+    })
+
+    try {
+      await wrapper.get('a').trigger('click')
+
+      await vi.waitFor(() => {
+        expect(openExternalUrl).toHaveBeenCalledWith(sameOriginUrl)
+      })
+      expect(open).not.toHaveBeenCalled()
+    } finally {
+      open.mockRestore()
+    }
   })
 
   it('highlights vue fenced blocks instead of rendering them as plain text', () => {
@@ -433,6 +613,58 @@ describe('MarkdownRenderer', () => {
     } finally {
       window.removeEventListener('hermes:preview-workspace-file', handlePreview)
     }
+  })
+
+  it('keeps code-styled local file links as markdown while previewing them', async () => {
+    const previewRequests: Array<{ path: string; fileName: string; previewOnly?: boolean }> = []
+    const handlePreview = (event: Event) => {
+      const customEvent = event as CustomEvent<{ path: string; fileName: string; previewOnly?: boolean }>
+      previewRequests.push(customEvent.detail)
+      customEvent.preventDefault()
+    }
+    window.addEventListener('hermes:preview-workspace-file', handlePreview)
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[`release-maintainer/SKILL.md`](</Users/zeeland/.hermes/skills/release-maintainer/SKILL.md>)',
+      },
+    })
+
+    try {
+      expect(wrapper.find('.markdown-file-card').exists()).toBe(false)
+      const link = wrapper.get('a')
+      expect(link.attributes('href')).toBe('/Users/zeeland/.hermes/skills/release-maintainer/SKILL.md')
+      expect(link.get('code').text()).toBe('release-maintainer/SKILL.md')
+      const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true })
+      link.element.dispatchEvent(clickEvent)
+      expect(clickEvent.defaultPrevented).toBe(true)
+      await vi.waitFor(() => {
+        expect(previewRequests).toEqual([{
+          path: '/Users/zeeland/.hermes/skills/release-maintainer/SKILL.md',
+          fileName: 'release-maintainer/SKILL.md',
+          previewOnly: true,
+        }])
+      })
+      expect(downloadApiMock.downloadFile).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+      window.removeEventListener('hermes:preview-workspace-file', handlePreview)
+    }
+  })
+
+  it('does not download a previewable code-styled link when no preview host accepts it', async () => {
+    const wrapper = mount(MarkdownRenderer, {
+      props: {
+        content: '[`release-maintainer/SKILL.md`](</tmp/release-maintainer/SKILL.md>)',
+      },
+    })
+    const link = wrapper.get('a')
+    const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true })
+
+    link.element.dispatchEvent(clickEvent)
+    await vi.waitFor(() => expect(clickEvent.defaultPrevented).toBe(true))
+
+    expect(downloadApiMock.downloadFile).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('removes line and column suffixes before previewing local workspace files', async () => {

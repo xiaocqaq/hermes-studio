@@ -126,6 +126,26 @@ function resolveReasoningEffort(value: unknown): ModelReasoningEffort {
   return normalizeReasoningEffort(value) ?? 'medium'
 }
 
+const DEFAULT_TOOL_EXECUTION_TIMEOUT_MS = 120_000
+
+/**
+ * Image generation (gpt-image-2 and similar) runs as `terminal_exec` of
+ * `studio-image-gen.mjs`. The helper itself waits up to 10 minutes, but a
+ * hardcoded 120s `toolContext.timeoutMs` used to SIGTERM the child first, so
+ * the image never finished. Honor the Ekko `tools.executionTimeoutMs` knob
+ * (Settings → Tools) so a 10-minute wait is a config change, not a rebuild.
+ */
+function resolveToolExecutionTimeoutMs(agent: { readConfig?: () => { tools?: { executionTimeoutMs?: number } } }): number {
+  try {
+    const configured = Number(agent.readConfig?.()?.tools?.executionTimeoutMs)
+    return Number.isFinite(configured) && configured > 0
+      ? Math.floor(configured)
+      : DEFAULT_TOOL_EXECUTION_TIMEOUT_MS
+  } catch {
+    return DEFAULT_TOOL_EXECUTION_TIMEOUT_MS
+  }
+}
+
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -977,6 +997,14 @@ export async function handleEkkoAgentRun(
         duration: Math.round(event.durationMs / 10) / 100,
         error: event.result.error,
       })
+    } else if (event.type === 'run.tool_recovery_required') {
+      emit(event.type, {
+        event: event.type,
+        run_id: event.runId,
+        tool: event.toolName,
+        name: event.toolName,
+        failures: event.failures,
+      })
     } else if (
       event.type === 'subagent.start' ||
       event.type === 'subagent.text' ||
@@ -1213,7 +1241,7 @@ export async function handleEkkoAgentRun(
       profileId: profile,
       browserSessionId: sessionId,
       mcpServers,
-      timeoutMs: 120_000,
+      timeoutMs: resolveToolExecutionTimeoutMs(agent),
       signal: abortController.signal,
       requestToolApproval: (request: AgentToolApprovalRequest) => waitForEkkoToolApproval(request, {
         sessionId,

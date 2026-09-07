@@ -45,12 +45,13 @@ const MESSAGE_TAIL_SLACK = 20
 /** Streaming edits settle in bursts; coalesce snapshot writes. */
 const CACHE_PERSIST_DEBOUNCE_MS = 1500
 const LEGACY_WORKSPACE_RUN_CHANGE_MESSAGE_PREFIX = 'workspace-run-change:'
-type ChatAgentId = 'hermes' | 'claude' | 'codex' | 'pi' | 'grok' | 'ekko-agent'
+type ChatAgentId = 'hermes' | 'claude' | 'codex' | 'pi' | 'grok' | 'opencode' | 'ekko-agent'
 
 function agentToCodingAgentId(agent?: string): ChatCodingAgentId | undefined {
   if (agent === 'codex') return 'codex'
   if (agent === 'pi') return 'pi'
   if (agent === 'grok') return 'grok'
+  if (agent === 'opencode') return 'opencode'
   if (agent === 'claude') return 'claude-code'
   if (agent === 'ekko-agent') return 'ekko-agent'
   return undefined
@@ -60,6 +61,7 @@ function codingAgentIdToAgent(id?: ChatCodingAgentId): ChatAgentId | undefined {
   if (id === 'codex') return 'codex'
   if (id === 'pi') return 'pi'
   if (id === 'grok') return 'grok'
+  if (id === 'opencode') return 'opencode'
   if (id === 'claude-code') return 'claude'
   if (id === 'ekko-agent') return 'ekko-agent'
   return undefined
@@ -453,7 +455,7 @@ export interface QueueInsertionState {
   generation: string
   runId?: string
   queueId: string
-  runtime: 'hermes' | 'ekko' | 'claude-code' | 'codex' | 'pi' | 'grok'
+  runtime: 'hermes' | 'ekko' | 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode'
   phase: 'requesting' | 'waiting_for_tool_batch' | 'stopping_current_turn'
   guarantee: 'strict' | 'immediate'
   requestedAt: number
@@ -3751,6 +3753,9 @@ export const useChatStore = defineStore('chat', () => {
     }
     if (codingAgentId === 'grok') {
       return { icon: '/coding-agents/grok.svg' }
+    }
+    if (codingAgentId === 'opencode') {
+      return { icon: '/coding-agents/opencode.png' }
     }
     if (codingAgentId === 'ekko-agent') {
       return { icon: '/coding-agents/ekko-agent.png' }

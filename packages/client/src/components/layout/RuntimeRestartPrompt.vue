@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NButton, NCard, NModal, useMessage } from 'naive-ui'
 import { useI18n } from 'vue-i18n'
 import {
@@ -16,13 +16,17 @@ const HANDLED_JOBS_KEY = 'hermes-runtime-restart-handled-jobs'
 const { t } = useI18n()
 const message = useMessage()
 const {
+  runtimeDownloadCheckRevision,
   pendingRuntimeRestart,
   requestRuntimeRestart,
   clearRuntimeRestart,
 } = useRuntimeRestartPrompt()
 const restarting = ref(false)
 const handledJobIds = new Set<string>()
-let pollTimer: ReturnType<typeof setInterval> | null = null
+let mounted = false
+let checking = false
+let checkRequested = false
+let pollTimer: ReturnType<typeof setTimeout> | null = null
 let restartWaitTimer: ReturnType<typeof setInterval> | null = null
 
 function restoreHandledJobs() {
@@ -46,6 +50,11 @@ function rememberHandledJob(jobId?: string) {
   }
 }
 
+function stopPolling() {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = null
+}
+
 async function checkCompletedRuntimeDownloads() {
   // GET /api/hermes/runtime-versions/jobs is requireSuperAdmin. Polling it as a
   // plain admin returns 403, and the shared request helper turns every local-BFF
@@ -53,10 +62,22 @@ async function checkCompletedRuntimeDownloads() {
   // against a 1.2s notice throttle that is a permanent "access denied" popup on
   // every page for non-super-admin accounts (same coupling as the 0.7.1 New Chat
   // bug pinned by tests/client/chat-panel-runtime-probe-permission.test.ts).
-  // Runtime installs are a super-admin action anyway, so nobody else needs the prompt.
-  if (!isStoredSuperAdmin()) return
+  // Runtime installs are a super-admin action anyway, so the gate below is what
+  // keeps every other role out of this poll.
+  stopPolling()
+  if (!mounted || !isStoredSuperAdmin()) return
+  if (checking) {
+    checkRequested = true
+    return
+  }
+  checking = true
+  let hasRunningJobs = false
   try {
     const response = await fetchVersionDownloadJobs()
+    if (!mounted || !isStoredSuperAdmin()) return
+    hasRunningJobs = response.jobs.some(job =>
+      job.kind === 'runtime' && (job.status === 'queued' || job.status === 'running'),
+    )
     const completed = response.jobs.filter(job =>
       job.kind === 'runtime'
       && job.status === 'completed'
@@ -70,9 +91,27 @@ async function checkCompletedRuntimeDownloads() {
     for (const job of completed.slice(1)) rememberHandledJob(job.id)
     requestRuntimeRestart(completed[0].version, completed[0].id)
   } catch {
-    // Authentication and transient network failures are retried by the poller.
+    // Stop on errors, including denied access. Opening version management or
+    // starting a download explicitly retries without an endless error loop.
+    checkRequested = false
+  } finally {
+    checking = false
+    if (mounted && isStoredSuperAdmin()) {
+      if (checkRequested) {
+        checkRequested = false
+        void checkCompletedRuntimeDownloads()
+      } else if (hasRunningJobs) {
+        pollTimer = setTimeout(() => {
+          void checkCompletedRuntimeDownloads()
+        }, POLL_INTERVAL_MS)
+      }
+    }
   }
 }
+
+watch(runtimeDownloadCheckRevision, () => {
+  void checkCompletedRuntimeDownloads()
+})
 
 function restartStandaloneWebUi() {
   let attempts = 0
@@ -98,7 +137,7 @@ function restartStandaloneWebUi() {
 }
 
 async function restartNow() {
-  if (!pendingRuntimeRestart.value || restarting.value) return
+  if (!isStoredSuperAdmin() || !pendingRuntimeRestart.value || restarting.value) return
   restarting.value = true
   try {
     const bridge = desktopBridge()
@@ -122,16 +161,14 @@ function restartLater() {
 }
 
 onMounted(() => {
-  if (!isStoredSuperAdmin()) return
+  mounted = true
   restoreHandledJobs()
   void checkCompletedRuntimeDownloads()
-  pollTimer = setInterval(() => {
-    void checkCompletedRuntimeDownloads()
-  }, POLL_INTERVAL_MS)
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer)
+  mounted = false
+  stopPolling()
   if (restartWaitTimer) clearInterval(restartWaitTimer)
 })
 </script>

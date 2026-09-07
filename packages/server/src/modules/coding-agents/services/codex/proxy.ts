@@ -171,7 +171,7 @@ async function callAnthropicMessages(target: CodexProxyTarget, body: any): Promi
     url: anthropicMessagesUrl(target),
     apiKey: target.apiKey,
     headers: {
-      'x-api-key': target.apiKey,
+      ...(target.apiKey ? { 'x-api-key': target.apiKey } : {}),
       'anthropic-version': '2023-06-01',
     },
     body: anthropicBody,
@@ -202,8 +202,30 @@ function responsesEventStream(events: AsyncIterable<CanonicalResponsesEvent>): R
 }
 
 function responseEventForCodexClient(target: CodexProxyTarget, event: CanonicalResponsesEvent): CanonicalResponsesEvent {
-  if (target.apiMode === 'codex_responses' || event.type !== 'response.completed') return event
+  if (event.type !== 'response.completed') return event
   const response = (event.data as any).response
+  if (target.agentId === 'opencode') {
+    // OpenCode's OpenAI Responses provider validates `response.completed`
+    // usage before it accepts the terminal event. Chat-compatible upstreams
+    // are allowed to omit usage, so keep real usage when available and emit
+    // the minimum valid shape otherwise. Without this terminal frame OpenCode
+    // reports an `unknown` finish reason and starts another agent step forever.
+    return {
+      ...event,
+      data: {
+        ...event.data,
+        response: {
+          ...response,
+          usage: response?.usage || {
+            input_tokens: 0,
+            output_tokens: 0,
+            total_tokens: 0,
+          },
+        },
+      },
+    }
+  }
+  if (target.apiMode === 'codex_responses') return event
   if (!response?.usage) return event
   const { usage: _usage, ...responseWithoutUsage } = response
   return {
@@ -220,10 +242,10 @@ async function* observe() {
     for await (const event of normalizeResponsesSseEvents(events)) {
       codingAgentRunManager.handleProxyUsageEvent(target.agentSessionId, event)
       const clientEvent = responseEventForCodexClient(target, event)
-      // Grok prints the same streamed text through its `streaming-json`
-      // stdout. Feeding proxy events directly into the run as well would
-      // append every model delta twice.
-      if (target.agentId !== 'grok') {
+      // Grok and OpenCode print the same model activity through their native
+      // stdout streams. The proxy remains responsible for transport and usage
+      // accounting, but must not become a second chat lifecycle source.
+      if (target.agentId !== 'grok' && target.agentId !== 'opencode') {
         codingAgentRunManager.handleResponseEvent(target.agentSessionId, clientEvent)
       }
       yield clientEvent
@@ -264,7 +286,7 @@ async function anthropicMessagesToResponsesSseStream(target: CodexProxyTarget, b
     url: anthropicMessagesUrl(target),
     apiKey: target.apiKey,
     headers: {
-      'x-api-key': target.apiKey,
+      ...(target.apiKey ? { 'x-api-key': target.apiKey } : {}),
       'anthropic-version': '2023-06-01',
     },
     body: anthropicBody,

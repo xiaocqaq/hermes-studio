@@ -20,6 +20,7 @@ import {
 import { downloadFile, getDownloadUrl, inferDownloadFileName } from '@/api/studio/download'
 import { isPreviewableFile } from '@/utils/hermes/file-preview'
 import { openUrlInDesktopBrowser } from '@/utils/desktop-browser'
+import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
 
 const LATEX_FENCE_LANGS = new Set(['latex', 'tex', 'math', 'katex'])
 function getFenceLanguage(info: string): string {
@@ -62,6 +63,8 @@ const props = withDefaults(defineProps<{
     content: string
     mentionNames?: string[]
     headingIdPrefix?: string
+    resolveImageUrl?: (path: string) => string
+    deferImages?: boolean
 }>(), {
     mentionNames: () => [],
     headingIdPrefix: '',
@@ -144,7 +147,7 @@ let renderGeneration = 0
 let unmounted = false
 
 function isLocalFilePath(path: string): boolean {
-  return path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)
+  return (path.startsWith('/') && !path.startsWith('//')) || /^[a-zA-Z]:[\\/]/.test(path)
 }
 
 function normalizeLocalFilePath(path: string): string {
@@ -158,10 +161,10 @@ function localFilePathWithoutLocation(path: string): string {
   return locationMatch[1]
 }
 
-function requestWorkspaceFilePreview(path: string, fileName: string): boolean {
+function requestWorkspaceFilePreview(path: string, fileName: string, previewOnly = false): boolean {
   const event = new CustomEvent('hermes:preview-workspace-file', {
     cancelable: true,
-    detail: { path, fileName },
+    detail: { path, fileName, ...(previewOnly ? { previewOnly: true } : {}) },
   })
   window.dispatchEvent(event)
   return event.defaultPrevented
@@ -186,6 +189,7 @@ function hasExtension(path: string, extensions: Set<string>): boolean {
 
 const renderedHtml = computed(() => {
   let html = md.render(repairNestedMarkdownFences(props.content))
+  if (props.deferImages) html = html.replace(/<img\b[^>]*>/gi, '')
 
   // Add IDs to headings for anchor links
   const prefix = props.headingIdPrefix ? `${props.headingIdPrefix}-` : ''
@@ -211,6 +215,11 @@ const renderedHtml = computed(() => {
   // Replace image src paths with download URLs
   html = html.replace(/\bsrc=(["'])([^"']+)\1/g, (match, quote, path) => {
     if (!isLocalFilePath(path)) return match
+    if (props.resolveImageUrl && !path.startsWith('//')) {
+      let decodedPath = md.utils.unescapeAll(path)
+      try { decodedPath = decodeURIComponent(decodedPath) } catch { /* Keep literal paths. */ }
+      return `src="${md.utils.escapeHtml(props.resolveImageUrl(normalizeLocalFilePath(decodedPath)))}"`
+    }
     const downloadUrl = getDownloadUrl(normalizeLocalFilePath(path))
     return `src=${quote}${downloadUrl}${quote}`
   })
@@ -420,6 +429,20 @@ onBeforeUnmount(() => {
 })
 
 async function handleMarkdownClick(event: MouseEvent): Promise<void> {
+  const target = event.target as HTMLElement
+  const link = target.closest('a') as HTMLAnchorElement | null
+  const href = link?.getAttribute('href') || ''
+  const isWebLink = /^(?:https?:)?\/\//i.test(href)
+  const webUrl = href.startsWith('//') ? `${window.location.protocol}${href}` : href
+  const isLocalLink = isLocalFilePath(href) || href.startsWith('/api/studio/files/download?')
+
+  // Native anchor navigation happens as soon as this async listener yields, so
+  // cancel all links handled below before the first await.
+  if (isWebLink || isLocalLink) {
+    event.preventDefault()
+    if (isLocalLink) event.stopPropagation()
+  }
+
   const copyResult = await handleCodeBlockCopyClick(event)
   if (copyResult !== null) {
     if (copyResult) {
@@ -429,8 +452,6 @@ async function handleMarkdownClick(event: MouseEvent): Promise<void> {
     }
     return
   }
-
-  const target = event.target as HTMLElement
 
   // Handle image clicks for preview
   const img = target.closest('img') as HTMLImageElement | null
@@ -471,23 +492,19 @@ async function handleMarkdownClick(event: MouseEvent): Promise<void> {
   }
 
   // Handle file path link clicks for download
-  const link = target.closest('a') as HTMLAnchorElement | null
   if (!link) return
-
-  const href = link.getAttribute('href')
   if (!href) return
 
-  // Desktop chat links stay inside the embedded browser. Web deployments keep
-  // using a separate browser tab so the hash-based router cannot intercept.
-  if (href.startsWith('http://') || href.startsWith('https://')) {
-    event.preventDefault()
+  // Desktop links use the configured destination. Web deployments keep using a
+  // separate browser tab so the hash-based router cannot intercept.
+  if (isWebLink) {
     try {
-      if (await openUrlInDesktopBrowser(href)) return
+      if (await openUrlInDesktopBrowser(webUrl)) return
     } catch (error) {
       message.error(`${t('browser.loadFailed')}: ${error instanceof Error ? error.message : String(error)}`)
       return
     }
-    window.open(href, '_blank', 'noopener,noreferrer')
+    window.open(webUrl, '_blank', 'noopener,noreferrer')
     return
   }
 
@@ -507,15 +524,24 @@ async function handleMarkdownClick(event: MouseEvent): Promise<void> {
     return
   }
 
-  // File path links: intercept and download
+  // Code-styled local file links intentionally remain ordinary Markdown links.
+  // Previewable files open as a single-file preview; unsupported files retain
+  // the existing download fallback.
   if (isLocalFilePath(href)) {
     event.preventDefault()
     event.stopPropagation()
     const linkText = link.textContent || ''
     const fileName = linkText.startsWith('File: ') ? linkText.slice(6).trim() : linkText.trim()
     const path = localFilePathWithoutLocation(href)
+    const downloadName = inferDownloadFileName(path, fileName || undefined)
+    if (isPreviewableFile(downloadName)) {
+      if (!requestWorkspaceFilePreview(path, downloadName, true)) {
+        message.error(t('files.previewFailed'))
+      }
+      return
+    }
     message.info(t('download.downloading'))
-    downloadFile(path, inferDownloadFileName(path, fileName || undefined)).catch((err: Error) => {
+    downloadFile(path, downloadName).catch((err: Error) => {
       message.error(err.message || t('download.downloadFailed'))
     })
   }
@@ -525,11 +551,12 @@ async function handleMarkdownClick(event: MouseEvent): Promise<void> {
 
 <template>
   <div ref="markdownBody" class="markdown-body" dir="auto" v-html="renderedHtml" @click="handleMarkdownClick"></div>
-  <Teleport to="body">
-    <div v-if="previewUrl" class="image-preview-overlay" @click.self="previewUrl = null">
-      <img :src="previewUrl" class="image-preview-img" @click="previewUrl = null" />
-    </div>
-  </Teleport>
+  <ImagePreviewOverlay
+    v-if="previewUrl"
+    :src="previewUrl"
+    alt=""
+    @close="previewUrl = null"
+  />
 </template>
 
 <style lang="scss">
@@ -802,25 +829,6 @@ async function handleMarkdownClick(event: MouseEvent): Promise<void> {
     align-items: center;
     justify-content: center;
   }
-}
-
-.image-preview-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  background: rgba(0, 0, 0, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.image-preview-img {
-  max-width: 90vw;
-  max-height: 90vh;
-  object-fit: contain;
-  border-radius: 4px;
-  cursor: pointer;
 }
 
 </style>

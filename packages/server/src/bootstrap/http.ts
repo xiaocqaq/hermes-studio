@@ -28,6 +28,7 @@ import { HermesSkillInjector } from '../modules/hermes/services/skills/injector'
 import { injectBundledMcpServer } from '../modules/hermes/services/mcp/studio-autoinject'
 import { ensureProfileGatewaysRunning } from '../modules/hermes/services/gateway/autostart'
 import { refreshConfiguredProviderModelCatalogsInBackground } from '../modules/hermes/services/providers/model-catalog-cache'
+import { initializeOpenCodeFreeInBackground } from '../modules/hermes/services/providers/opencode-free'
 import {
   scanLanDevices,
   selectLanIPv4Address,
@@ -61,6 +62,7 @@ import { createCodexProxyRequestBodyParser, createRequestBodyParser } from '../m
 import {
   getCodingAgentsStatus,
   migratePersistedPiRuntimeMcpConfigs,
+  restorePersistedCodexProxyTargets,
   restorePersistedPiProxyTargets,
 } from './coding-agents'
 import { isAuthorizedCodexProxyRequest } from '../modules/coding-agents/services/codex/proxy'
@@ -438,6 +440,15 @@ export async function bootstrap() {
   }
 
   try {
+    const restoredCodexProxyTargets = await restorePersistedCodexProxyTargets()
+    if (restoredCodexProxyTargets > 0) {
+      console.log(`[bootstrap] restored ${restoredCodexProxyTargets} persisted Codex/Grok proxy target(s)`)
+    }
+  } catch (err) {
+    logger.warn(err, '[bootstrap] failed to restore persisted Codex/Grok proxy targets')
+  }
+
+  try {
     const restoredPiProxyTargets = await restorePersistedPiProxyTargets()
     if (restoredPiProxyTargets > 0) {
       console.log(`[bootstrap] restored ${restoredPiProxyTargets} persisted Pi proxy target(s)`)
@@ -653,6 +664,7 @@ export async function bootstrap() {
     close: stopLanDiscoveryResponder,
   })
   refreshConfiguredProviderModelCatalogsInBackground('bootstrap')
+  initializeOpenCodeFreeInBackground()
 
   if (isDesktopRuntime()) {
     await startRuntimeServicesAfterListen(hermesAgentAvailable)

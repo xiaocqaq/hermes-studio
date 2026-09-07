@@ -1,6 +1,7 @@
 import { socialMessagesZh } from '../social-messages'
 
 export default {
+  agentAutoUpdate: { label: '自动更新' },
   ekkoConfig: {
     "settingsTitle": "设置",
     "settingsRuntime": "运行",
@@ -12,7 +13,7 @@ export default {
     "authorized": "已授权",
     "maxSteps": "最大工具轮次",
     "maxModelRetries": "模型重试次数",
-    "maxToolFailures": "连续工具失败上限",
+    "maxToolFailures": "同一工具失败纠错阈值",
     "backgroundDelegation": "后台委派",
     "subtaskMaxSteps": "子任务工具轮次",
     "defaultProvider": "默认 Provider",
@@ -49,7 +50,7 @@ export default {
     "featureToggleHint": "控制 Ekko 是否可以使用这项能力。",
     "runLimitHint": "限制单次运行的工作量；达到上限后结束继续执行。",
     "retryLimitHint": "模型请求失败后自动重试的最大次数。",
-    "failureLimitHint": "工具连续失败达到该次数后停止当前运行。",
+    "failureLimitHint": "同一工具连续失败达到该次数后，要求模型纠错或换方案，运行不会因此终止。",
     "timeoutHint": "对应请求或操作超过该时长后自动中止。",
     "modelParameterHint": "随模型请求发送，用于控制回复生成和推理行为。",
     "authorizationLeewayHint": "在授权过期前提前这段时间进行刷新。",
@@ -577,6 +578,7 @@ export default {
       viewMessages: '消息推送',
       downloadTitle: '在手机上使用 HStudio',
       downloadDescription: '我们正在内测阶段，需要注册码才有办法注册，我们会在社交媒体放出一部分注册码。',
+      downloadPaidDescription: 'Hermes Studio App 已正式上线，目前处于付费阶段。如需体验，请前往定价与购买页面选择合适的方案，完成购买后即可开始使用。',
       downloadScan: '手机扫码下载',
       downloadScanHint: '当前提供 Android 安装包',
       available: '可下载',
@@ -610,6 +612,7 @@ export default {
       accessFailureMode: '当前模式：{mode}',
       accessFailureDeviceName: '设备名称：{deviceName}',
       accessFailureTime: '失败时间：{time}',
+      purchaseAccess: '去购买',
       accessModes: {
         internal: '内测',
         public_beta: '公测',
@@ -619,6 +622,8 @@ export default {
       accessFailures: {
         tokenExpired: 'Token 已失效',
         paidAccountRequired: '当前账户不是付费账号，无法使用该功能',
+        cloudSubscriptionRequired: '当前账号未开通 HStudio Cloud，无法使用云端连接',
+        appAccessExpired: '当前内测或公测资格已过期，无法使用云端连接',
         required: 'App 未携带访问授权签名',
         invalid: 'App 访问授权签名无效',
         expired: 'App 访问授权已过期',
@@ -1010,7 +1015,10 @@ export default {
     uncategorized: '未分类',
     categoryPlaceholder: '选择或新建分类',
     categoryCreateHint: '选择已有分类，或输入新分类名称后按 Enter 创建。',
+    createCategory: '创建新分类',
     categoryCreated: '已创建分类“{name}”',
+    categoryCreatedAndMoved: '已创建分类“{name}”并移动会话',
+    categoryCreatedMoveFailed: '已创建分类“{name}”，但未能移动会话。请重试以移动会话。',
     categoryCreateFailed: '创建分类失败',
     categoryLoadFailed: '加载分类失败',
     moveToCategory: '移动到分类',
@@ -1097,6 +1105,8 @@ export default {
     workspaceRecent: '最近使用',
     defaultWorkspace: '默认工作区',
     more: '更多',
+    sidePanel: '侧边面板',
+    sessionActions: '会话操作',
     setWorkspace: '设置工作区',
     setWorkspaceTitle: '设置会话工作区',
     workspacePlaceholder: '输入项目路径，例如 /home/user/project',
@@ -1877,6 +1887,10 @@ export default {
 
   // 模型
   models: {
+    opencodeFreeHint: "无需账号或 API key，免费模型可能受到限流。",
+    opencodeFreeLoading: "正在后台加载免费模型…",
+    opencodeFreeRetry: "免费提供商检测或目录刷新失败，将自动重试并保留缓存模型。",
+    opencodeFreeUpgrade: "请更新 Hermes Agent 以使用 OpenCode Free。",
     title: '模型',
     searchPlaceholder: '搜索模型...',
     noResults: '无结果',
@@ -2463,7 +2477,11 @@ export default {
       themeDark: '暗色',
       themeSystem: '跟随系统',
       chatInputHeight: '聊天输入框高度',
-      chatInputHeightHint: '桌面端聊天输入框默认高度（像素）。移动端保持自动高度。'
+      chatInputHeightHint: '桌面端聊天输入框默认高度（像素）。移动端保持自动高度。',
+      linkOpenTarget: '网页链接打开方式',
+      linkOpenTargetHint: '选择消息和 Markdown 预览中的网页链接在哪里打开。',
+      linkOpenTargetHermesStudio: 'Hermes Studio',
+      linkOpenTargetDefaultBrowser: '默认浏览器',
     },
     agent: {
       maxTurns: '最大轮次',
@@ -3004,6 +3022,8 @@ export default {
     newVersionAvailable: "发现新版本",
     checkUpdateFailed: "检查更新失败",
     configFiles: "配置文件",
+    preference: "偏好",
+    configuration: "配置",
     profileScope: "配置",
     providerScope: "提供商",
     providerPlaceholder: "例如 custom:glm",
@@ -3416,7 +3436,7 @@ export default {
     cacheHitRate: '缓存命中率',
     modelBreakdown: '模型分布',
     agentBreakdown: 'Agent 分布',
-    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', ekkoAgent: 'Ekko', unknown: '未知' },
+    agents: { hermes: 'Hermes Agent', claudeCode: 'Claude', codex: 'Codex', pi: 'Pi', grok: 'Grok', opencode: 'OpenCode', ekkoAgent: 'Ekko', unknown: '未知' },
     dailyTrend: '每日用量',
     date: '日期',
     tokens: 'Token',
@@ -3533,6 +3553,23 @@ export default {
 
   // 更新日志
   changelog: {
+    new_0_7_18_1: '新增 OpenCode Coding Agent，支持会话续接、流式工具调用、配置、记忆、Skills、工作流和群聊 (#2890)',
+    new_0_7_18_2: '群聊现在支持通过云端中继连接远程 Agent，改善流式输出顺序、断线重连、摘要恢复与分享图片访问，并统一工具折叠和移动端布局 (#2927)',
+    new_0_7_18_3: '新增手机单次定位、日历与提醒事项能力；敏感操作需用户确认，删除操作绑定已确认的具体条目，并完善授权超时与请求来源校验 (#2820, #2926)',
+    new_0_7_18_4: '统一会话操作菜单，支持移动会话时新建分类，刷新后保留分类折叠状态，并新增 Ctrl/Cmd + , 打开设置的快捷键 (#2887, #2896, #2910, #2912)',
+    new_0_7_18_5: '支持发送前预览已上传图片、预览代码样式的本地文件链接与工作区 Markdown，并优化消息引用、恢复回复箭头 (#2885, #2893, #2903, #2908)',
+    new_0_7_18_6: 'Runtime 下载轮询现在仅对超级管理员按需运行；Windows 解压采用独立目录并在系统 tar 不可用时回退到 Node tar，同时修复分离式 Hermes Runtime 的 Bridge MCP 导入 (#2925)',
+    new_0_7_18_7: 'Coding Agent 现在会隔离启动失败的 MCP Runtime 并清理已移除的服务；Studio 管理的 MCP 启动器明确使用 Node 模式，避免 Electron 误开桌面窗口 (#2888, #2920)',
+    new_0_7_18_8: 'Ekko 现在可从重复工具失败中恢复，改善工具重试与失败处理 (#2891)',
+    new_0_7_18_9: '修复空环境变量值跨行读取的问题，避免下一行配置被误当作模型地址或密钥 (#2884)',
+    new_0_7_18_10: '应用下载页新增购买入口，并根据版本清单中的访问模式显示 (#2895)',
+    new_0_7_17_1: 'Coding Agent 设置现在为 Claude、Codex、Pi 和 Grok 提供统一导航与撑满页面的“偏好”和“配置”编辑器；Skills 与 MCP 也统一采用 Studio 卡片样式和操作（#2854、#2870、#2871）',
+    new_0_7_17_2: 'Grok 现在可在运行失败后续接会话、显示实际生效的 Runtime 配置，并从 npm 官方源安装；Codex 安装也改用官方源（#2855、#2857、#2868、#2881）',
+    new_0_7_17_3: 'Ekko 现在会限制过大的工具输出，强化记忆与工作区处理，并代理模型供应商不支持的 MCP 工具名称（#2846、#2847、#2849）',
+    new_0_7_17_4: '应用连接现在恢复生产环境中继地址，明确显示权限失败，提供购买入口，并完成连接错误的本地化（#2872、#2873、#2874）',
+    new_0_7_17_5: 'Profile 头像现在使用可确定复现的 Boring Avatars 替代生成图片，无需打包头像文件也能保持身份一致（#2875）',
+    new_0_7_17_6: '从桌面端托盘退出现在会取消待执行的重启；已处理的 Runtime 重启提示在刷新后也会继续保持关闭（#2842、#2852）',
+    new_0_7_17_7: '移动端渠道现在能正确上报版本，TTS 会在启动时恢复当前供应商，Skills 也能安全处理 URL 保留字符（#2839、#2843、#2845）',
     new_0_7_16_1: '桌面端现在会通过 Electron 处理内置 Web UI 发起的 Runtime 重启请求，使用带重复请求保护的干净重启，同时保留独立 Web UI 的重启行为（#2827）',
     new_0_7_16_2: '工作流和群聊现在可用 scoped 或 global 模式启动 Claude、Codex 和 Pi Agent；global 模式会隔离 Studio 管理的提示词和运行环境，同时保留用户配置（#2828）',
     new_0_7_16_3: 'Grok CLI 现作为一等 Coding Agent 集成，支持 scoped 代理模型、隔离 global 模式、原生会话续接、用量统计、Skills、工作流和群聊（#2832）',
