@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# 前端 release 接收端 —— 这是整条链路里唯一以 root 运行的部分。
+#
+# 为什么单独拆出来：线上 vhost 是 0600 root（deploy 用户连读都不行），
+# 改 root 指向、chown、nginx -s reload 都需要特权。与其给 CI 一把 root
+# key，不如让它只能往 incoming/ 扔一个 tarball、再 sudo 调这一个脚本 ——
+# 安全边界就落在这里：deploy key 泄了，能做的也只有「发一版前端」。
+#
+# 入参全部按不可信处理：tarball 只认 incoming/ 下的纯文件名，tar 成员
+# 路径逐条检查再解包，入口 hash 从解出来的 index.html 里读，不听调用方
+# 声明。SITE 等目标写死在脚本里，sudo 的 env_reset 也拦掉了环境变量注入。
+#
+# 【绝不碰后端】：不跑 npm，不 restart hermes-webui，只 reload nginx。
+#
+# 用法（由 scripts/deploy-frontend.sh 调用，也可手动）：
+#   hermes-frontend-release <tarball 文件名> [--keep N] [--no-merge-prev]
+#
+set -euo pipefail
+
+SITE='hs.xlingo.fun'
+RELEASES_DIR="/www/wwwroot/${SITE}/releases"
+VHOST_CONF="/www/server/panel/vhost/nginx/${SITE}.conf"
+INCOMING_DIR='/var/lib/hermes-deploy/incoming'
+KEEP_BAK=5            # vhost 备份保留几份（回滚用）
+SELFCHECK_TRIES=15    # 源站自检最多探几次，见下面「为什么要重试」
+SELFCHECK_GAP=2       # 每次间隔秒数
+
+KEEP=0
+MERGE_PREV=1
+TARBALL_NAME=''
+
+die() { echo "!! $*" >&2; exit 1; }
+
+[ "$(id -u)" = '0' ] || die '必须以 root 运行（正常由 sudo 调用）'
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep) KEEP="${2:-}"; shift 2 ;;
+    --no-merge-prev) MERGE_PREV=0; shift ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -*) die "未知参数：$1" ;;
+    *) [ -z "$TARBALL_NAME" ] || die '只能指定一个 tarball'; TARBALL_NAME="$1"; shift ;;
+  esac
+done
+
+# ------------------------------------------------------------ 1. 校验入参
+# 只认纯文件名：带 / 或 .. 的一律拒，避免 sudo 调用方指向 incoming/ 之外
+[ -n "$TARBALL_NAME" ] || die '缺少 tarball 文件名'
+case "$TARBALL_NAME" in
+  */*|*..*) die "tarball 只能是 incoming/ 下的文件名：$TARBALL_NAME" ;;
+esac
+echo "$TARBALL_NAME" | grep -qE '^[A-Za-z0-9._-]+\.tgz$' \
+  || die "tarball 名不合规（只允许 [A-Za-z0-9._-]+.tgz）：$TARBALL_NAME"
+echo "$KEEP" | grep -qE '^[0-9]+$' || die "--keep 需要非负整数：$KEEP"
+
+TARBALL="${INCOMING_DIR}/${TARBALL_NAME}"
+[ -f "$TARBALL" ] || die "tarball 不存在：$TARBALL"
+[ -f "$VHOST_CONF" ] || die "vhost 不存在：$VHOST_CONF"
+
+TS="$(date +%Y%m%d-%H%M%S)"
+DEST="${RELEASES_DIR}/${TS}-frontend"
+
+# ------------------------------------------------------------ 2. 解包 + 查内容
+STAGE="$(mktemp -d /tmp/hermes-frontend-stage.XXXXXX)"
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+# 解包前先看清单：绝对路径和 .. 都能逃出 STAGE，必须拦在解包之前
+if tar -tzf "$TARBALL" | grep -qE '(^/|^\.\./|/\.\./|/\.\.$)'; then
+  die "tarball 含越界路径，拒绝解包：$TARBALL_NAME"
+fi
+# --no-same-owner/permissions：tarball 来自 CI，里面的 uid 和权限位不可信
+tar -xzf "$TARBALL" -C "$STAGE" --no-same-owner --no-same-permissions
+[ -f "$STAGE/client/index.html" ] || die 'tarball 里没有 client/index.html'
+
+# 入口 hash 从解出来的产物里读，不接受调用方声明 —— 自检才有意义
+BUNDLE="$(grep -o 'assets/js/index-[A-Za-z0-9_-]*\.js' "$STAGE/client/index.html" | head -1)"
+[ -n "$BUNDLE" ] || die 'index.html 里找不到入口 bundle'
+echo "==> release ${TS}，入口 ${BUNDLE}（$(find "$STAGE/client" -type f | wc -l) 个文件）"
+
+# ------------------------------------------------------------ 3. 落盘（还没接流量）
+# 从 vhost 里读当前 release，而不是猜
+PREV="$(grep -oP '(?<=root )\S+(?=;)' "$VHOST_CONF" | grep -F "$RELEASES_DIR" | head -1 || true)"
+echo "    当前 release：${PREV:-<无>}"
+[ -n "$PREV" ] || die "vhost 里没找到 ${RELEASES_DIR} 下的 root，请先手动确认"
+
+mkdir -p "$DEST"
+cp -a "$STAGE/client/." "$DEST/"
+
+# 为什么要并入上一版的 assets：CDN 给 index.html 压了 max-age=300，切 root 后
+# 最多 5 分钟内仍有边缘节点吐旧 index.html，它引用的旧 hash 资源在新目录里
+# 不存在 → 404 白屏。资源名带内容 hash，同名即同内容，所以合并绝对安全；
+# cp -n 不覆盖新文件。
+if [ "$MERGE_PREV" = '1' ] && [ -d "$PREV/assets" ]; then
+  cp -rn "$PREV/assets/." "$DEST/assets/" 2>/dev/null || true
+  echo '    已并入上一版 assets（过渡期防 404）'
+fi
+
+chown -R root:root "$DEST"
+chmod -R a+rX "$DEST"
+echo "    落盘完成：$(find "$DEST" -type f | wc -l) 个文件"
+
+# ------------------------------------------------------------ 4. 切 root + reload
+BAK="${VHOST_CONF}.bak.${TS}"
+cp -a "$VHOST_CONF" "$BAK"
+
+rollback() {
+  echo "!! 回滚 vhost（$BAK）" >&2
+  cp -a "$BAK" "$VHOST_CONF"
+  nginx -t >/dev/null 2>&1 && nginx -s reload || true
+}
+
+sed -i "s#${PREV}#${DEST}#g" "$VHOST_CONF"
+echo "    新 root：$(grep -n 'root .*releases' "$VHOST_CONF" | head -1)"
+
+if nginx -t >/dev/null 2>&1; then
+  nginx -s reload
+  echo '    nginx reload OK（优雅，不中断会话）'
+else
+  rollback
+  die 'nginx -t 失败，已回滚'
+fi
+
+# ------------------------------------------------------------ 5. 源站自检（带重试）
+# 为什么要重试：nginx -s reload 是优雅切换，老 worker 会把手上的请求做完才退，
+# 新 root 不是瞬间生效。紧跟 reload 探一次，很可能命中老 worker → 假 404。
+# 旧版脚本在这里直接 exit 1（而且不回滚），无人值守时会无故变红。
+# 轮询到超时才算真失败，那时才回滚。
+probe() {
+  curl -sS -k -o /dev/null -w '%{http_code}' -H "Host: ${SITE}" \
+    "https://127.0.0.1/${BUNDLE}" --max-time 10 2>/dev/null || echo 000
+}
+served_bundle() {
+  curl -sS -k -H "Host: ${SITE}" 'https://127.0.0.1/' --max-time 10 2>/dev/null \
+    | grep -o 'assets/js/index-[A-Za-z0-9_-]*\.js' | head -1 || true
+}
+
+ok=0
+for i in $(seq 1 "$SELFCHECK_TRIES"); do
+  code="$(probe)"
+  served="$(served_bundle)"
+  if [ "$code" = '200' ] && [ "$served" = "$BUNDLE" ]; then
+    echo "    源站自检通过（第 ${i} 次：入口 200，index.html 指向新 bundle）"
+    ok=1
+    break
+  fi
+  echo "    自检第 ${i}/${SELFCHECK_TRIES} 次：入口 HTTP ${code}，index 指向 ${served:-<空>}，等 ${SELFCHECK_GAP}s"
+  sleep "$SELFCHECK_GAP"
+done
+
+if [ "$ok" != '1' ]; then
+  rollback
+  die "源站自检 ${SELFCHECK_TRIES} 次均未通过，已回滚到上一版（备份 ${BAK}）"
+fi
+
+# ------------------------------------------------------------ 6. 清理
+rm -f "$TARBALL"
+
+# 当前生效的 release 从 vhost 重新读一遍，永不删它
+LIVE="$(grep -oP '(?<=root )\S+(?=;)' "$VHOST_CONF" | grep -F "$RELEASES_DIR" | head -1 || true)"
+
+if [ "$KEEP" -gt 0 ]; then
+  # || true：没有匹配项时 ls 非 0，配合 pipefail 会误判整个发布失败
+  (ls -1d "$RELEASES_DIR"/*-frontend 2>/dev/null | sort | head -n "-${KEEP}" || true) \
+  | while read -r old; do
+      # 用 if 而不是 [ ] && continue：后者条件为假时返回 1，set -e 会中止循环
+      if [ "$old" = "$DEST" ] || [ "$old" = "$LIVE" ]; then continue; fi
+      rm -rf "$old" && echo "    清理旧 release：$(basename "$old")"
+    done
+fi
+
+# vhost 备份只留最近几份，否则一年下来几百个文件
+(ls -1t "${VHOST_CONF}".bak.* 2>/dev/null | tail -n "+$((KEEP_BAK + 1))" || true) \
+| while read -r b; do rm -f "$b"; done
+
+echo "==> 发布完成：release ${TS}"
+echo "    回滚：cp -a ${BAK} ${VHOST_CONF} && nginx -t && nginx -s reload"

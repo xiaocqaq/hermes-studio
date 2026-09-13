@@ -1,0 +1,94 @@
+name: Deploy frontend
+
+# 把自定义前端发布到 hs.xlingo.fun。
+#
+# 只发前端：nginx 的 root 指向 releases/<时间戳>-frontend，这里换的就是它。
+# 后端（hermes-web-ui npm 包）不在 CI 范围内 —— 它要 restart 服务、会掐断正在
+# 跑的 agent 会话，必须人工挑时间做。
+#
+# 权限模型：服务器上的 deploy 用户没有 root，能做的只有「往 incoming/ 扔
+# tarball」+「sudo 调 hermes-frontend-release」。落盘、切 root、reload、自检、
+# 回滚全在那个 root 脚本里。装它见 scripts/ops/install-deploy-user.sh。
+#
+# 先只留手动触发，跑顺几次再考虑加 push:branches:[custom]。
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: '发布后保留最近几个 release（0 = 不清理）'
+        required: false
+        default: '5'
+
+# 这个仓库是公开 fork，workflow 日志任何人可见。默认最小权限，
+# 也不要往日志里打主机名之外的东西。
+permissions:
+  contents: read
+
+# 同一时间只允许一个发布在跑，且不取消进行中的那个 ——
+# 中途被 kill 可能停在「已切 root、还没自检」的状态。
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 需要 secrets，fork 来的 PR 不该也拿不到；显式限定只在本仓库跑。
+    if: github.repository == 'xiaocqaq/hermes-studio'
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        # --ignore-scripts：只构建前端，不需要 node-pty 之类的原生模块
+        run: npm ci --ignore-scripts
+
+      - name: Run client tests
+        # 只有 client bundle 会上线，所以这就是真正的发布闸门。
+        # server 测试在 CI 上意义不大（线上后端是 npm 包，不是这个仓库构建的）。
+        run: npx vitest run tests/client
+
+      - name: Type check
+        run: node node_modules/vue-tsc/bin/vue-tsc.js -b --force
+
+      - name: Build client
+        # 与 scripts/deploy-frontend.sh 里一致：只跑 vite build
+        run: node node_modules/vite/bin/vite.js build
+
+      - name: Setup SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          [ -n "$DEPLOY_KEY" ] || { echo '!! 缺少 secret DEPLOY_SSH_KEY' >&2; exit 1; }
+          [ -n "$DEPLOY_HOST" ] || { echo '!! 缺少 secret DEPLOY_HOST' >&2; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # 固定 host key，不用 StrictHostKeyChecking=no —— 那等于接受任何中间人
+          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+          # --skip-build：上面已经构建过，不要再花一遍时间
+          bash scripts/deploy-frontend.sh --skip-build --keep '${{ inputs.keep }}'
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519
