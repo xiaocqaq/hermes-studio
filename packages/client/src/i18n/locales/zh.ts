@@ -177,7 +177,7 @@ export default {
   },
   // 登录
   login: {
-    title: 'Ekko Studio',
+    title: 'Hermes Studio',
     description: '输入用户名和密码以继续。',
     placeholder: '访问令牌',
     submit: '登录',

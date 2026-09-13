@@ -189,7 +189,7 @@ export default {
   },
   // Login
   login: {
-    title: 'Ekko Studio',
+    title: 'Hermes Studio',
     description: 'Insira seu nome de usuário e senha para continuar.',
     placeholder: 'Token de acesso',
     submit: 'Entrar',
