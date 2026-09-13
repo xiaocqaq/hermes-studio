@@ -72,8 +72,11 @@ GitHub secrets（仓库 Settings → Secrets → Actions）：
 | `DEPLOY_HOST` | `deploy@115.159.206.76` |
 | `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan -t ed25519,rsa 115.159.206.76` 的输出 |
 
-workflow 是 `.github/workflows/deploy-frontend.yml`，先只挂 `workflow_dispatch`。
-跑顺几次再加 `push: branches: [custom]`。fork 来的 PR 拿不到这些 secret，
+workflow 是 `.github/workflows/deploy-frontend.yml`：
+- `workflow_dispatch` 随时手动发
+- 推到 `custom` 且碰到前端相关路径时自动发（不挂 `main`，避免上游合并把未定制的包打上去）
+
+fork 来的 PR 拿不到这些 secret，
 `if: github.repository == 'xiaocqaq/hermes-studio'` 再挡一层。
 
 自检会轮询最多 15 次 × 2s：`nginx -s reload` 是优雅切换，老 worker 不会瞬间

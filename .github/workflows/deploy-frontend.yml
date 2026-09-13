@@ -10,7 +10,8 @@ name: Deploy frontend
 # tarball」+「sudo 调 hermes-frontend-release」。落盘、切 root、reload、自检、
 # 回滚全在那个 root 脚本里。装它见 scripts/ops/install-deploy-user.sh。
 #
-# 先只留手动触发，跑顺几次再考虑加 push:branches:[custom]。
+# 手动随时发；推到 custom 且碰到前端相关路径时自动发。
+# 不挂 main：main 会跟上游合并，不该把未定制的包打到 hs.xlingo.fun。
 
 on:
   workflow_dispatch:
@@ -19,6 +20,19 @@ on:
         description: '发布后保留最近几个 release（0 = 不清理）'
         required: false
         default: '5'
+  push:
+    branches: [custom]
+    paths:
+      - 'packages/client/**'
+      - 'tests/client/**'
+      - 'scripts/deploy-frontend.sh'
+      - 'scripts/ops/hermes-frontend-release'
+      - '.github/workflows/deploy-frontend.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig.json'
+      - 'tsconfig.*.json'
 
 # 这个仓库是公开 fork，workflow 日志任何人可见。默认最小权限，
 # 也不要往日志里打主机名之外的东西。
@@ -89,7 +103,10 @@ jobs:
           set -euo pipefail
           export SSH_IDENTITY="${HOME}/.ssh/id_ed25519"
           # --skip-build：上面已经构建过，不要再花一遍时间
-          bash scripts/deploy-frontend.sh --skip-build --keep '${{ inputs.keep }}'
+          # push 没有 inputs.keep，回落到 5
+          keep='${{ inputs.keep }}'
+          keep="${keep:-5}"
+          bash scripts/deploy-frontend.sh --skip-build --keep "$keep"
 
       - name: Cleanup SSH key
         if: always()
