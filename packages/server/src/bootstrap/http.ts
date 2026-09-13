@@ -13,7 +13,9 @@ import { setupTerminalWebSocket } from '../modules/hermes/sockets/terminal'
 import { setupKanbanEventsWebSocket } from '../modules/hermes/sockets/kanban-events'
 import { startVersionCheck } from './health'
 import { registerRoutes } from './routes'
+import { dshPluginUi } from '../modules/coding-agents/services'
 import './chat-agent-runtime-adapter'
+import './skill-files-adapter'
 import { setGroupChatServer } from '../modules/studio/routes/group-chat'
 import { setChatRunServer } from '../modules/studio/public/chat-run'
 import { GroupChatServer } from '../modules/studio/public/group-chat'
@@ -27,6 +29,7 @@ import { getAgentBridgeManager, startAgentBridgeManager } from '../modules/herme
 import { HermesSkillInjector } from '../modules/hermes/services/skills/injector'
 import { injectBundledMcpServer } from '../modules/hermes/services/mcp/studio-autoinject'
 import { ensureProfileGatewaysRunning } from '../modules/hermes/services/gateway/autostart'
+import { runRegisteredStartupTasks } from './startup-tasks'
 import { refreshConfiguredProviderModelCatalogsInBackground } from '../modules/hermes/services/providers/model-catalog-cache'
 import { initializeOpenCodeFreeInBackground } from '../modules/hermes/services/providers/opencode-free'
 import {
@@ -369,6 +372,11 @@ function recordLockedHermesSelection(selection: HermesRuntimeSelection): void {
 export async function bootstrap() {
   bootstrapReady = false
   console.log(`hermes-web-ui v${APP_VERSION} starting...`)
+  try {
+    await runRegisteredStartupTasks()
+  } catch {
+    logger.warn('[bootstrap] startup task state could not be read or saved; deferred remaining tasks')
+  }
   await ensureStartupDirectory(config.uploadDir, 'upload')
   if (shouldCreateWebUiDataDir()) {
     await ensureStartupDirectory(config.dataDir, 'development data')
@@ -488,6 +496,8 @@ export async function bootstrap() {
   // Initialize all web-ui SQLite tables
   const { initAllStores } = await import('../modules/studio/infrastructure/database/init')
   initAllStores()
+  const { interruptOrphanedTaskPlans } = await import('../modules/studio/repositories/task-plan-store')
+  interruptOrphanedTaskPlans()
   startChatWebhookDispatcher()
   console.log('[bootstrap] all stores initialized')
 
@@ -497,6 +507,7 @@ export async function bootstrap() {
   // authenticated request here so the proxy can remove historical image data
   // before dispatching to any provider API mode.
   app.use(createCodexProxyRequestBodyParser(isAuthorizedCodexProxyRequest))
+  app.use(dshPluginUi.middleware)
   // Raise body limits above the default 1mb: profile avatars and MiMo voice-clone
   // reference audio are posted as base64 data URLs before reaching handlers.
   app.use(createRequestBodyParser())
@@ -539,6 +550,8 @@ export async function bootstrap() {
   bootstrapReady = true
   console.log('[bootstrap] web UI shell ready')
 
+  const closeDshPluginUi = dshPluginUi.attach(servers)
+  additionalShutdownSteps.push({ name: 'DSH plugin UI transport', close: closeDshPluginUi })
   const terminalWebSocket = setupTerminalWebSocket(servers)
   if (terminalWebSocket) {
     additionalShutdownSteps.push({
@@ -644,7 +657,8 @@ export async function bootstrap() {
         writeBadUpgradeRequest(socket)
         return
       }
-      if (url.pathname !== '/api/hermes/terminal' &&
+      if (!dshPluginUi.handlesUpgrade(req) &&
+        url.pathname !== '/api/hermes/terminal' &&
         url.pathname !== '/api/hermes/kanban/events' &&
         url.pathname !== getLanPeerSocketPath() &&
         !url.pathname.startsWith('/socket.io/')) {

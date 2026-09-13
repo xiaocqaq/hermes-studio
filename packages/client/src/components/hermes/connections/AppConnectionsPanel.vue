@@ -31,7 +31,7 @@ function normalizePanelView(value: unknown): AppPanelView {
 }
 
 const DISMISSED_ACCESS_FAILURE_KEY = 'hermes:app-access-failure-dismissed-at'
-const APP_ACCESS_PURCHASE_URL = 'https://hermes-studio.ai/pricing/'
+const APP_ACCESS_PURCHASE_URL = 'https://ekkostudio.xyz/pricing/'
 const PURCHASE_REQUIRED_FAILURE_CODES = new Set([
   'cloud_subscription_required',
   'paid_account_required',
@@ -42,8 +42,8 @@ const DEFAULT_MOBILE_RELEASE: StudioMobileRelease = {
   channels: {
     androidApk: {
       version: '1.0.0',
-      githubUrl: 'https://github.com/EKKOLearnAI/hermes-studio/releases/download/v1.0.0/HStudio.apk',
-      cloudflareUrl: 'https://download.ekkolearnai.com/v1.0.0/HStudio.apk',
+      githubUrl: 'https://github.com/EKKOLearnAI/hermes-studio/releases/download/v1.0.0/Ekko Studio.apk',
+      cloudflareUrl: 'https://download.ekkolearnai.com/v1.0.0/Ekko Studio.apk',
       online: true,
     },
     googlePlay: { version: '1.0.0', url: '', online: false },
@@ -675,7 +675,7 @@ onUnmounted(() => {
                 <img src="/logo.png" alt="">
               </div>
               <div>
-                <span>HStudio Mobile</span>
+                <span>Ekko Studio Mobile</span>
                 <h3>{{ t('connections.app.downloadTitle') }}</h3>
               </div>
             </div>

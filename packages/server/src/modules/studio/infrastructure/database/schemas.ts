@@ -37,6 +37,17 @@ export const USAGE_RUN_INDEX = `CREATE UNIQUE INDEX IF NOT EXISTS idx_session_us
 // Session Store (session-store.ts)
 // ============================================================================
 
+export const TASK_PLANS_TABLE = 'task_plans'
+export const TASK_PLANS_SCHEMA: Record<string, string> = {
+  session_id: 'TEXT NOT NULL',
+  plan_id: 'TEXT NOT NULL',
+  run_id: 'TEXT NOT NULL',
+  revision: 'INTEGER NOT NULL',
+  execution_state: 'TEXT NOT NULL',
+  snapshot: 'TEXT NOT NULL',
+  created_at: 'INTEGER NOT NULL',
+}
+
 export const SESSIONS_TABLE = 'sessions'
 
 export const SESSION_CATEGORIES_TABLE = 'session_categories'
@@ -58,6 +69,7 @@ export const SESSIONS_SCHEMA: Record<string, string> = {
   source: 'TEXT NOT NULL DEFAULT \'api_server\'',
   agent: 'TEXT NOT NULL DEFAULT \'\'',
   agent_mode: 'TEXT NOT NULL DEFAULT \'\'',
+  agent_preset: 'TEXT NOT NULL DEFAULT \'\'',
   agent_session_id: 'TEXT NOT NULL DEFAULT \'\'',
   agent_native_session_id: 'TEXT NOT NULL DEFAULT \'\'',
   user_id: 'TEXT',
@@ -911,6 +923,7 @@ export const GC_ROOM_AGENTS_SCHEMA: Record<string, string> = {
   model: "TEXT NOT NULL DEFAULT ''",
   apiMode: "TEXT NOT NULL DEFAULT ''",
   reasoningEffort: "TEXT NOT NULL DEFAULT ''",
+  agentPreset: "TEXT NOT NULL DEFAULT ''",
   name: 'TEXT NOT NULL',
   description: "TEXT NOT NULL DEFAULT ''",
   avatar: "TEXT NOT NULL DEFAULT ''",
@@ -934,6 +947,7 @@ export const GC_AGENT_PRESETS_SCHEMA: Record<string, string> = {
   model: 'TEXT NOT NULL',
   apiMode: "TEXT NOT NULL DEFAULT ''",
   reasoningEffort: "TEXT NOT NULL DEFAULT ''",
+  agentPreset: "TEXT NOT NULL DEFAULT ''",
   name: 'TEXT NOT NULL',
   description: "TEXT NOT NULL DEFAULT ''",
   avatar: "TEXT NOT NULL DEFAULT ''",
@@ -1503,6 +1517,13 @@ export function initAllHermesTables(): void {
     // Session store
     syncTable(SESSION_CATEGORIES_TABLE, SESSION_CATEGORIES_SCHEMA, {
       indexes: SESSION_CATEGORIES_INDEXES,
+    })
+    syncTable(TASK_PLANS_TABLE, TASK_PLANS_SCHEMA, {
+      indexes: {
+        idx_task_plans_identity: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_task_plans_identity ON task_plans(session_id, plan_id)',
+        idx_task_plans_run: 'CREATE INDEX IF NOT EXISTS idx_task_plans_run ON task_plans(session_id, run_id)',
+        idx_task_plans_latest: 'CREATE INDEX IF NOT EXISTS idx_task_plans_latest ON task_plans(session_id, created_at DESC)',
+      },
     })
     syncTable(SESSIONS_TABLE, SESSIONS_SCHEMA, {
       indexes: SESSIONS_INDEXES,

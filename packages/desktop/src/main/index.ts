@@ -25,7 +25,7 @@ import {
   startWebUiServer,
   stopWebUiServer,
 } from './webui-server'
-import { bundledNode, desktopIcon, desktopMacTrayIcon, desktopRuntimeVersion, desktopWindowsTrayIcon, runtimeStorageRoot, webuiDir, webUiHome } from './paths'
+import { bundledNode, desktopIcon, desktopLinuxTrayIcon, desktopMacTrayIcon, desktopRuntimeVersion, desktopWindowsTrayIcon, runtimeStorageRoot, webuiDir, webUiHome } from './paths'
 import { checkForDesktopUpdates, initAutoUpdater } from './updater'
 import { t } from './desktop-i18n'
 import { resetDesktopDefaultLogin } from './desktop-login-reset'
@@ -48,6 +48,10 @@ import { BrowserBroker } from './browser/browser-broker'
 import type { BrowserBounds } from './browser/browser-types'
 import { migratePendingLegacyWindowsData } from './legacy-windows-data-migration'
 import { createDesktopAppLifecycle } from './app-lifecycle'
+import { configureDesktopIdentity } from './desktop-identity'
+import { migrateWindowsLoginItem } from './login-item-migration'
+
+configureDesktopIdentity(app)
 
 const PORT = Number(process.env.HERMES_DESKTOP_PORT) || 8748
 const START_HIDDEN = process.argv.includes('--hidden')
@@ -463,7 +467,7 @@ function createTray() {
     ? desktopMacTrayIcon()
     : process.platform === 'win32'
       ? desktopWindowsTrayIcon()
-      : desktopIcon()
+      : desktopLinuxTrayIcon()
   const sourceIcon = nativeImage.createFromPath(source)
   const icon = process.platform === 'darwin'
     ? sourceIcon
@@ -473,7 +477,7 @@ function createTray() {
         quality: 'best',
       })
   tray = new Tray(icon)
-  tray.setToolTip('Hermes Studio')
+  tray.setToolTip('Ekko Studio')
   tray.on('click', () => {
     showMainWindow()
     updateTrayMenu()
@@ -487,7 +491,7 @@ async function createWindow(): Promise<void> {
     height: 820,
     minWidth: 769,
     minHeight: 600,
-    title: 'Hermes Studio',
+    title: 'Ekko Studio',
     backgroundColor: '#1a1a1a',
     autoHideMenuBar: true,
     show: false,
@@ -600,7 +604,7 @@ async function openChatWindow(sessionIdInput: unknown, profileInput?: unknown): 
     height: 760,
     minWidth: 620,
     minHeight: 480,
-    title: 'Hermes Studio',
+    title: 'Ekko Studio',
     backgroundColor: '#1a1a1a',
     autoHideMenuBar: true,
     show: false,
@@ -725,7 +729,7 @@ function installMicrophonePermissionHandler() {
 function splashHtml(label = t('desktop.startingLocalServices')): string {
   const startingLabel = escapeHtml(label)
   const pageBackground = process.platform === 'win32' ? 'transparent' : '#1a1a1a'
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Hermes Studio</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Ekko Studio</title>
 <style>
   html,body{margin:0;height:100%;background:${pageBackground};color:#e5e5e5;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;-webkit-app-region:drag;}
   .surface{height:100%;background:#1a1a1a}
@@ -742,7 +746,7 @@ function splashHtml(label = t('desktop.startingLocalServices')): string {
   @keyframes progress{0%{transform:translateX(-110%)}100%{transform:translateX(360%)}}
   h1{font-weight:500;margin:0;font-size:18px}
 </style></head><body><main class="surface"><div class="wrap">
-<h1>Hermes Studio</h1>
+<h1>Ekko Studio</h1>
 <div class="row"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
 <div id="label" class="label">${startingLabel}</div>
 <div class="progress"><div id="bar" class="bar indeterminate"></div></div>
@@ -806,7 +810,7 @@ function runtimeSourceHtml(errorMessage?: string): string {
         <pre>${safeError}</pre>
        </section>`
     : ''
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Hermes Studio</title>
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Ekko Studio</title>
 <style>
   :root{color-scheme:dark}
   *{box-sizing:border-box}
@@ -834,7 +838,7 @@ function runtimeSourceHtml(errorMessage?: string): string {
     button{min-height:78px}
   }
 </style></head><body><main class="surface"><div class="wrap">
-<div class="brand">${logoUrl ? `<img class="mark" src="${logoUrl}" alt="Hermes Studio">` : ''}<h1>Hermes Studio</h1></div>
+<div class="brand">${logoUrl ? `<img class="mark" src="${logoUrl}" alt="Ekko Studio">` : ''}<h1>Ekko Studio</h1></div>
 <p class="label">${escapeHtml(t('desktop.selectRuntimeSource'))}</p>
 ${errorBlock}
 <div class="actions">
@@ -914,7 +918,7 @@ async function installPackagedCommandShims(): Promise<void> {
     }),
     installHermesStudioMcpShim({
       nodePath: bundledNode(),
-      scriptPath: join(webuiDir(), 'bin', 'hermes-studio-mcp.mjs'),
+      scriptPath: join(webuiDir(), 'bin', 'ekko-studio-mcp.mjs'),
       webUiUrl: `http://127.0.0.1:${PORT}`,
     }),
   ]
@@ -922,7 +926,7 @@ async function installPackagedCommandShims(): Promise<void> {
   for (const result of results) {
     if (result.status === 'rejected') {
       console.warn(
-        `[cli-shim] failed to install Hermes Studio command: `
+        `[cli-shim] failed to install Ekko Studio command: `
         + `${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
       )
       continue
@@ -1161,11 +1165,12 @@ ipcMain.handle('hermes-desktop:browser-annotate', (event, tabId?: unknown, mode?
 ipcMain.handle('hermes-desktop:browser-cancel-annotation', (event, tabId?: unknown) => browserForEvent(event).cancelAnnotation(String(tabId || '')))
 ipcMain.handle('hermes-desktop:browser-update-annotation-note', (event, tabId?: unknown, marker?: unknown, note?: unknown) => {
   const value = Number(marker)
-  if (!Number.isInteger(value) || value < 1 || value > 100) throw new Error('Invalid browser annotation marker')
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('Invalid browser annotation marker')
   return browserForEvent(event).updateAnnotationNote(String(tabId || ''), value, String(note || '').slice(0, 500))
 })
 ipcMain.handle('hermes-desktop:browser-capture-annotations', (event, tabId?: unknown) => browserForEvent(event).captureAnnotations(String(tabId || '')))
 ipcMain.handle('hermes-desktop:browser-clear-annotations', (event, tabId?: unknown) => browserForEvent(event).clearAnnotations(String(tabId || '')))
+ipcMain.handle('hermes-desktop:browser-remove-annotation', (event, tabId?: unknown, marker?: unknown) => browserForEvent(event).removeAnnotation(String(tabId || ''), Number(marker)))
 ipcMain.handle('hermes-desktop:select-runtime-directory', async (_event, defaultPath?: unknown) => {
   const options: OpenDialogOptions = {
     properties: ['openDirectory'],
@@ -1235,7 +1240,7 @@ ipcMain.handle('hermes-desktop:notify-completion', (_event, payload?: { title?: 
 
   const title = typeof payload?.title === 'string' && payload.title.trim()
     ? payload.title.trim()
-    : 'Hermes Studio'
+    : 'Ekko Studio'
   const body = typeof payload?.body === 'string' ? payload.body.trim().slice(0, 240) : ''
   const icon = resolveNotificationIcon(payload?.icon)
   const clickUrl = safeNotificationClickUrl(payload?.clickUrl)
@@ -1313,6 +1318,11 @@ function runDesktopApp() {
     // visual clutter. macOS keeps a menu (system requirement) but Electron's
     // default is fine there.
     if (process.platform !== 'darwin') Menu.setApplicationMenu(null)
+    try {
+      migrateWindowsLoginItem(app, APP_USER_MODEL_ID)
+    } catch (error) {
+      console.warn('[desktop] failed to migrate the Windows login item:', error)
+    }
     installMicrophonePermissionHandler()
     createTray()
     await createWindow()
@@ -1330,7 +1340,7 @@ function runDesktopApp() {
     })
   }).catch(error => {
     console.error('[desktop] failed during Electron startup:', error)
-    dialog.showErrorBox('Hermes Studio', String(error instanceof Error ? error.message : error))
+    dialog.showErrorBox('Ekko Studio', String(error instanceof Error ? error.message : error))
     quitApp()
   })
 

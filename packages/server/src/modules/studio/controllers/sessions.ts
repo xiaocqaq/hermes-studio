@@ -1,3 +1,4 @@
+import { getSessionTaskPlans } from '../services/task-plans'
 import {
   deleteHermesSessionForProfile,
   getHermesCliSession,
@@ -11,9 +12,11 @@ import {
   listHermesSessionSummaryGroups,
   notifyHermesSessionModelChanged,
   stopCodingAgentSessionRun,
+  invalidateCodingAgentSessionRuntime,
 } from '../public/session-agent-runtime'
 import {
   listSessions as localListSessions,
+  countSessions as localCountSessions,
   searchSessions as localSearchSessions,
   getSession as localGetSession,
   getSessionDetail as localGetSessionDetail,
@@ -184,7 +187,7 @@ function mergeHermesHistorySessions(
   const importedIds = new Set(localSessions.map(session => session.id))
   const historySessionsById = new Map<string, any>()
   // Keep Hermes Agent state.db as the canonical summary when both stores have
-  // the same id. Hermes Studio contributes import/archive state and local-only
+  // the same id. Ekko Studio contributes import/archive state and local-only
   // coding-agent sessions without replacing the Agent-owned session fields.
   for (const session of hermesSessions) {
     historySessionsById.set(session.id, {
@@ -410,6 +413,7 @@ export async function listConversations(ctx: any) {
     agent_mode: s.agent_mode,
     agent_session_id: s.agent_session_id,
     agent_native_session_id: s.agent_native_session_id,
+    agent_preset: s.agent_preset,
     model: s.model,
     provider: s.provider,
     api_mode: s.api_mode,
@@ -473,23 +477,49 @@ export async function list(ctx: any) {
   const limit = ctx.query.limit ? parseInt(ctx.query.limit as string, 10) : undefined
   const profile = explicitProfileFilter(ctx)
   const effectiveLimit = limit && limit > 0 ? limit : 2000
+  const paginated = ctx.query.offset !== undefined
+  const requestedOffset = Number(ctx.query.offset)
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset > 0 ? requestedOffset : 0
+  const category = ctx.query.category
+  const categoryId = category === 'none' ? null : category === undefined ? undefined : Number(category)
+  if (categoryId !== undefined && categoryId !== null && (!Number.isSafeInteger(categoryId) || categoryId <= 0)) {
+    ctx.status = 400
+    ctx.body = { error: 'category must be a positive integer or none' }
+    return
+  }
+  const readIds = (raw: unknown): string[] => (Array.isArray(raw) ? raw : raw ? [raw] : [])
+    .map(value => String(value).trim()).filter(Boolean)
+  const includedIds = ctx.query.include === undefined ? undefined : readIds(ctx.query.include)
+  const excludedIds = readIds(ctx.query.exclude)
 
   const knownProfiles = profile ? null : new Set(listProfileNamesFromDisk())
   const allowedProfiles = allowedProfileSet(ctx)
   const visibleProfiles = knownProfiles
     ? [...knownProfiles].filter(name => !allowedProfiles || allowedProfiles.has(name))
     : undefined
-  const allSessions = localListSessions(profile, source, effectiveLimit, {
+  const listOptions = {
+    ...(categoryId !== undefined ? { categoryId } : {}),
+    ...(includedIds !== undefined ? { includeSessionIds: includedIds } : {}),
     sources: source ? undefined : requestedSessionSources(),
     profiles: visibleProfiles,
     includeArchived: false,
-    excludeSessionIds: [...getPendingDeletedSessionIds()],
+    excludeSessionIds: [...getPendingDeletedSessionIds(), ...excludedIds],
+  }
+  const allSessions = localListSessions(profile, source, effectiveLimit + (paginated ? 1 : 0), {
+    ...listOptions,
+    ...(paginated ? { offset } : {}),
   })
-  ctx.body = {
-    sessions: filterPendingDeletedSessions(filterArchivedSessions(filterByAllowedProfiles(ctx, allSessions).filter(s =>
+  const sessions = filterPendingDeletedSessions(filterArchivedSessions(filterByAllowedProfiles(ctx, allSessions).filter(s =>
       isRequestedSessionSource(source, s.source) &&
       (!knownProfiles || knownProfiles.has(s.profile || 'default')),
-    ))),
+    )))
+  ctx.body = {
+    sessions: paginated ? sessions.slice(0, effectiveLimit) : sessions,
+    ...(paginated ? {
+      hasMore: sessions.length > effectiveLimit, offset, limit: effectiveLimit,
+      total: profile && allowedProfiles && !allowedProfiles.has(profile)
+        ? 0 : localCountSessions(profile, source, listOptions),
+    } : {}),
   }
 }
 
@@ -1573,6 +1603,7 @@ export async function setReasoningEffort(ctx: any) {
   }
 
   localUpdateSession(id, { reasoning_effort: reasoningEffort })
+  if (existing.agent === 'grok') invalidateCodingAgentSessionRuntime(id)
   getChatRunServer()?.emitSessionSettingsUpdated(id, {
     reasoning_effort: reasoningEffort,
   })
@@ -2085,6 +2116,7 @@ export async function getConversationMessagesPaginated(ctx: any) {
       output_tokens: session.output_tokens,
     },
     messages: result.messages,
+    taskPlans: getSessionTaskPlans(ctx.params.id, result.messages, offset === 0),
     workspaceRunChanges: listWorkspaceRunChangesForAssistantMessages(ctx.params.id, assistantMessageIds),
     total: result.total,
     offset: result.offset,

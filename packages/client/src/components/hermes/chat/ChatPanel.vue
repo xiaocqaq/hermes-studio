@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import DshSessionPresetSelect from "@/components/coding-agents/dsh/DshSessionPresetSelect.vue";
 import {
   batchDeleteSessions,
   createSessionCategory,
@@ -37,7 +38,7 @@ import {
   useMessage,
   type DropdownOption,
 } from "naive-ui";
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { copyToClipboard } from "@/utils/clipboard";
@@ -77,6 +78,8 @@ const props = withDefaults(defineProps<{
   initialComposerText: "",
   composerPersistDraft: true,
 });
+
+provide('hermesWorkspaceFilePreview', true);
 
 const FilesPanel = defineAsyncComponent(async () => (await import('./FilesPanel.vue')).default);
 const ConnectionsPanel = defineAsyncComponent(async () => (await import('@/components/hermes/connections/ConnectionsPanel.vue')).default);
@@ -412,7 +415,13 @@ function workspacePreviewPath(filePath: string): string | null {
 }
 
 function handleWorkspaceFilePreviewRequest(event: Event) {
-  const customEvent = event as CustomEvent<{ path?: string; fileName?: string; previewOnly?: boolean }>;
+  const customEvent = event as CustomEvent<{
+    path?: string
+    fileName?: string
+    previewOnly?: boolean
+    startLine?: number
+    endLine?: number
+  }>;
   const sessionId = activePreviewSessionId.value;
   const filePath = typeof customEvent.detail?.path === "string" ? customEvent.detail.path : "";
   const previewPath = workspacePreviewPath(filePath);
@@ -422,13 +431,27 @@ function handleWorkspaceFilePreviewRequest(event: Event) {
   const requestSeq = ++workspacePreviewRequestSeq;
   workspacePreviewRequestPending = true;
   const fileName = customEvent.detail?.fileName || previewPath.split("/").pop() || previewPath;
+  const requestedStartLine = customEvent.detail?.startLine;
+  const startLine = Number.isInteger(requestedStartLine) && requestedStartLine! > 0
+    ? requestedStartLine
+    : undefined;
+  const requestedEndLine = customEvent.detail?.endLine;
+  const endLine = startLine && Number.isInteger(requestedEndLine) && requestedEndLine! >= startLine
+    ? requestedEndLine
+    : startLine;
   filesStore.closePreview();
   toolPanelStore.closeWorkspaceDiff();
   selectedSubagent.value = null;
   const previewOnly = customEvent.detail?.previewOnly === true;
   previewOnlyFileOpen.value = previewOnly;
   if (previewOnly) showToolPanel.value = true;
-  void filesStore.openSessionWorkspacePreview(sessionId, previewPath, fileName)
+  void filesStore.openSessionWorkspacePreview(
+    sessionId,
+    previewPath,
+    fileName,
+    -1,
+    startLine ? { startLine, endLine } : undefined,
+  )
     .then(() => {
       if (requestSeq === workspacePreviewRequestSeq) workspacePreviewRequestPending = false;
     })
@@ -839,6 +862,8 @@ const newChatBaseUrl = ref<string>("");
 const newChatApiKey = ref<string>("");
 const newChatApiMode = ref<CodingAgentApiMode>("codex_responses");
 const newChatWorkspace = ref("");
+const newChatAgentPreset = ref<string>();
+const newChatPresetReady = ref(false);
 const newChatCategoryId = ref<number | null>(null);
 const newChatCategoryCreating = ref(false);
 const newChatCategorySelectRevision = ref(0);
@@ -993,6 +1018,7 @@ const newChatAgentOptions = computed(() => [
   { label: "Pi", value: "pi" },
   { label: "Grok", value: "grok" },
   { label: "OpenCode", value: "opencode" },
+  { label: "DeepSeek Harness", value: "dsh" },
 ]);
 
 const newChatApiModeOptions = computed(() => [
@@ -1109,7 +1135,7 @@ const selectedNewChatProviderGroup = computed(() =>
 );
 
 const isNewChatCodingAgent = computed(() => newChatAgent.value !== "hermes");
-const isNewChatExternalCodingAgent = computed(() => newChatAgent.value === "claude-code" || newChatAgent.value === "codex" || newChatAgent.value === "pi" || newChatAgent.value === "grok" || newChatAgent.value === "opencode");
+const isNewChatExternalCodingAgent = computed(() => newChatAgent.value === "claude-code" || newChatAgent.value === "codex" || newChatAgent.value === "pi" || newChatAgent.value === "grok" || (newChatAgent.value === "opencode" || newChatAgent.value === "dsh"));
 const effectiveNewChatAgentMode = computed(() =>
   effectiveNewChatMode(newChatAgent.value, newChatAgentMode.value),
 );
@@ -1132,7 +1158,8 @@ const newChatNeedsApiKey = computed(() =>
   !selectedNewChatProviderGroup.value?.api_key,
 );
 const canConfirmNewChat = computed(() => {
-  if (newChatCategoryCreating.value) return false;
+  if (newChatCategoryCreating.value || newChatLoading.value) return false;
+  if (newChatAgent.value === "dsh" && (!newChatAgentPreset.value || !newChatPresetReady.value)) return false;
   if (!newChatProfile.value) return false;
   if (!newChatUsesProviderModel.value) return true;
   if (!newChatProvider.value || !newChatModel.value) return false;
@@ -1251,6 +1278,8 @@ async function openNewChatModal() {
   isBatchMode.value = false;
   selectedSessionKeys.value.clear();
   showBatchDeleteConfirm.value = false;
+  newChatAgentPreset.value = undefined;
+  newChatPresetReady.value = false;
   showNewChatModal.value = true;
   newChatLoading.value = true;
   newChatCategoryId.value = null;
@@ -1296,6 +1325,7 @@ function handleNewChatProviderChange(value: string) {
 }
 
 async function confirmNewChat() {
+  if (!canConfirmNewChat.value) return;
   if (newChatAgent.value === "hermes") {
     newChatLoading.value = true;
     try {
@@ -1323,7 +1353,7 @@ async function confirmNewChat() {
       const status = await fetchCodingAgentsStatus();
       const tool = status.tools.find((item) => item.id === agentId);
       if (!tool?.installed) {
-        const fallbackName = agentId === "codex" ? "Codex" : agentId === "pi" ? "Pi" : agentId === "grok" ? "Grok" : "Claude";
+        const fallbackName = newChatAgentOptions.value.find(option => option.value === agentId)?.label || agentId;
         message.warning(t("codingAgents.installRequired", { agent: tool?.name || fallbackName }));
         showNewChatModal.value = false;
         await router.push({ name: "hermes.agentManager" });
@@ -1349,7 +1379,7 @@ async function confirmNewChat() {
         ? "pi"
       : newChatAgent.value === "grok"
         ? "grok"
-      : newChatAgent.value === "opencode"
+      : newChatAgent.value === "dsh" ? "dsh" : newChatAgent.value === "opencode"
         ? "opencode"
       : newChatAgent.value === "ekko-agent"
         ? "ekko-agent"
@@ -1362,6 +1392,7 @@ async function confirmNewChat() {
     agent,
     codingAgentId: newChatAgent.value === "hermes" ? undefined : newChatAgent.value,
     codingAgentMode: source === "coding_agent" ? codingAgentMode : undefined,
+    agentPreset: newChatAgent.value === "dsh" ? newChatAgentPreset.value : undefined,
     workspace: newChatWorkspace.value || null,
     categoryId: newChatCategoryId.value,
     baseUrl: source === "coding_agent" && !isGlobalCodingAgent ? group?.base_url || newChatBaseUrl.value.trim() || undefined : undefined,
@@ -1379,6 +1410,7 @@ async function confirmNewChat() {
     params: { sessionId: session.id },
   });
   showNewChatModal.value = false;
+  if (mobileQuery?.matches) showSessions.value = false;
 }
 
 function sessionProfile(sessionId: string): string | null {
@@ -2119,7 +2151,7 @@ const sessionModelCodingAgentId = computed<ChatCodingAgentId | undefined>(() =>
         ? "pi"
       : sessionModelSession.value?.agent === "grok"
         ? "grok"
-      : sessionModelSession.value?.agent === "opencode"
+      : sessionModelSession.value?.agent === "dsh" ? "dsh" : sessionModelSession.value?.agent === "opencode"
         ? "opencode"
       : sessionModelSession.value?.agent === "ekko-agent"
         ? "ekko-agent"
@@ -2517,7 +2549,7 @@ async function handleSessionModelCustomSubmit() {
               :active="s.id === chatStore.activeSessionId"
               :pinned="sessionBrowserPrefsStore.isPinned(s.id)"
               :can-delete="s.id !== chatStore.activeSessionId || chatStore.sessions.length > 1"
-              :streaming="chatStore.isSessionLive(s.id)"
+              :streaming="chatStore.isSessionWorking(s.id)"
               :completed-unread="chatStore.isSessionCompletedUnread(s.id)"
               :selectable="isBatchMode"
               :selected="isSessionSelected(s)"
@@ -2564,7 +2596,7 @@ async function handleSessionModelCustomSubmit() {
               s.id !== chatStore.activeSessionId ||
               chatStore.sessions.length > 1
             "
-            :streaming="chatStore.isSessionLive(s.id)"
+            :streaming="chatStore.isSessionWorking(s.id)"
             :completed-unread="chatStore.isSessionCompletedUnread(s.id)"
             :selectable="isBatchMode"
             :selected="isSessionSelected(s)"
@@ -2631,7 +2663,7 @@ async function handleSessionModelCustomSubmit() {
                 s.id !== chatStore.activeSessionId ||
                 chatStore.sessions.length > 1
               "
-              :streaming="chatStore.isSessionLive(s.id)"
+              :streaming="chatStore.isSessionWorking(s.id)"
               :completed-unread="chatStore.isSessionCompletedUnread(s.id)"
               :selectable="isBatchMode"
               :selected="isSessionSelected(s)"
@@ -2980,6 +3012,10 @@ async function handleSessionModelCustomSubmit() {
               :disabled="newChatLoading"
             />
           </label>
+          <DshSessionPresetSelect
+            v-if="showNewChatModal && newChatAgent === 'dsh'"
+            v-model="newChatAgentPreset" :disabled="newChatLoading" @valid="newChatPresetReady = $event"
+          />
           <label v-if="isNewChatExternalCodingAgent" class="new-chat-field">
             <span class="new-chat-label">{{ t("codingAgents.launchModeScope") }}</span>
             <NRadioGroup v-model:value="newChatAgentMode" name="new-chat-coding-agent-mode">

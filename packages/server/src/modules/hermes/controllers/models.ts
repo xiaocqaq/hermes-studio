@@ -1,3 +1,4 @@
+import { openCodeSessionHeaders } from '../../studio/public/opencode-session'
 import { readFile } from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
@@ -10,6 +11,7 @@ import { getCopilotModelsDetailed, resolveCopilotOAuthToken, type CopilotModelMe
 import { readAppConfig, writeAppConfig, providerDisplayLabel, type ModelVisibilityRule } from '../../studio/public/app-config'
 import { listUserProfiles } from '../../studio/public/users'
 import { readModelContextRecord, upsertModelContextRecord } from '../../studio/public/provider-context'
+import { getModelContextLength } from '../services/models/context'
 import { readProviderModelCatalogCache,
   refreshConfiguredProviderModelCatalogs,
   resolveProviderCatalogModels,
@@ -967,7 +969,7 @@ export async function fetchProviderModelList(ctx: any) {
 
     const base = baseUrl.replace(/\/+$/, '')
     const modelsUrl = /\/v\d+\/?$/.test(base) ? `${base}/models` : `${base}/v1/models`
-    const headers: Record<string, string> = {}
+    const headers: Record<string, string> = openCodeSessionHeaders(modelsUrl)
     if (apiKey && provider !== OPENCODE_FREE_PROVIDER) headers.Authorization = `Bearer ${apiKey}`
 
     const res = await fetch(modelsUrl, {
@@ -1209,8 +1211,17 @@ export async function getModelContext(ctx: any) {
       return
     }
     if (!result.row) {
-      ctx.status = 404
-      ctx.body = { error: 'Model context not found' }
+      const isCustomProvider = provider === 'custom' || provider.startsWith('custom:')
+      if (!isCustomProvider) {
+        ctx.status = 404
+        ctx.body = { error: 'Model context not found' }
+        return
+      }
+      const fallbackContextLength = 128_000
+      const contextLimit = getModelContextLength({ profile, provider, model, fallbackContextLength })
+      ctx.body = {
+        data: { id: null, provider, model, context_limit: contextLimit, limit: contextLimit },
+      }
       return
     }
 

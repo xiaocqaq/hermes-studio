@@ -71,6 +71,9 @@ const RuntimeRestartPrompt = defineAsyncComponent(
   async () =>
     (await import("@/components/layout/RuntimeRestartPrompt.vue")).default,
 );
+const StudioAnnouncementPrompt = defineAsyncComponent(
+  async () => (await import('@/components/layout/StudioAnnouncementPrompt.vue')).default,
+);
 
 const {
   isDark,
@@ -344,6 +347,9 @@ useKeyboard();
           <RuntimeRestartPrompt
             v-if="!isLoginPage && !isDesktopPetRoute && !isStandaloneChatPage && isStoredSuperAdmin()"
           />
+          <StudioAnnouncementPrompt
+            v-if="!isLoginPage && !isInviteOnlyPage && !isDesktopPetRoute && !isStandaloneChatPage"
+          />
         </NNotificationProvider>
       </NDialogProvider>
     </NMessageProvider>
@@ -417,7 +423,7 @@ useKeyboard();
   overflow-y: auto;
   background-color: $bg-primary;
 
-  .no-sidebar:not(.has-hermes-config-sidebar):not(.has-ekko-config-sidebar) & {
+  .no-sidebar:not(.has-hermes-config-sidebar):not(.has-ekko-config-sidebar):not(.has-coding-agent-config-sidebar) & {
     height: 100%;
   }
 

@@ -14,6 +14,7 @@ export interface SessionSummary {
   provider?: string
   api_mode?: ProviderApiMode
   reasoning_effort?: string
+  agent_preset?: string
   title: string | null
   parent_session_id?: string | null
   fork_point_message_id?: string | null
@@ -74,6 +75,7 @@ export interface SessionContext {
 export interface PaginatedSessionMessages {
   session: SessionSummary
   messages: HermesMessage[]
+  taskPlans?: import('@/utils/task-plan').TaskPlanSnapshot[]
   workspaceRunChanges: WorkspaceRunChangeSummary[]
   total: number
   offset: number

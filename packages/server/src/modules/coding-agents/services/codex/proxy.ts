@@ -156,6 +156,8 @@ async function callOpenAiChat(target: CodexProxyTarget, body: any): Promise<any>
   return agentRunGateway.completeJson({
     url: chatCompletionsUrl(target),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     body: chatBody,
   })
 }
@@ -170,6 +172,8 @@ async function callAnthropicMessages(target: CodexProxyTarget, body: any): Promi
   return agentRunGateway.completeJson({
     url: anthropicMessagesUrl(target),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     headers: {
       ...(target.apiKey ? { 'x-api-key': target.apiKey } : {}),
       'anthropic-version': '2023-06-01',
@@ -188,6 +192,8 @@ async function callOpenAiResponses(target: CodexProxyTarget, body: any): Promise
   return agentRunGateway.completeJson({
     url: resolveResponsesUrl(target.baseUrl),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     body: responsesBody,
   })
 }
@@ -242,10 +248,10 @@ async function* observe() {
     for await (const event of normalizeResponsesSseEvents(events)) {
       codingAgentRunManager.handleProxyUsageEvent(target.agentSessionId, event)
       const clientEvent = responseEventForCodexClient(target, event)
-      // Grok and OpenCode print the same model activity through their native
+      // Grok, OpenCode and DSH report the same model activity through their native
       // stdout streams. The proxy remains responsible for transport and usage
       // accounting, but must not become a second chat lifecycle source.
-      if (target.agentId !== 'grok' && target.agentId !== 'opencode') {
+      if (target.agentId !== 'grok' && target.agentId !== 'opencode' && target.agentId !== 'dsh') {
         codingAgentRunManager.handleResponseEvent(target.agentSessionId, clientEvent)
       }
       yield clientEvent
@@ -266,6 +272,8 @@ async function openAiChatToResponsesSseStream(target: CodexProxyTarget, body: an
   const stream = await agentRunGateway.streamBytes({
     url: chatCompletionsUrl(target),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     body: chatBody,
   })
   return responsesEventStream(observableResponsesEvents(target, openAiChatSseToResponsesEvents(stream, {
@@ -285,6 +293,8 @@ async function anthropicMessagesToResponsesSseStream(target: CodexProxyTarget, b
   const stream = await agentRunGateway.streamBytes({
     url: anthropicMessagesUrl(target),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     headers: {
       ...(target.apiKey ? { 'x-api-key': target.apiKey } : {}),
       'anthropic-version': '2023-06-01',
@@ -308,6 +318,8 @@ async function openAiResponsesSseStream(target: CodexProxyTarget, body: any): Pr
   const stream = await agentRunGateway.streamBytes({
     url: resolveResponsesUrl(target.baseUrl),
     apiKey: target.apiKey,
+    sessionId: target.chatSessionId || target.agentSessionId || target.routeKey,
+    provider: target.provider,
     body: responsesBody,
   })
   return responsesEventStream(observableResponsesEvents(target, openAiResponsesSseToResponsesEvents(stream)))

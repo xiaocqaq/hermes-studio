@@ -1,3 +1,4 @@
+import { readDshMcpServers, updateDshMcpServer, validateDshMcpServer, assertDshMcpProbeIsLiteral } from './dsh/config'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
@@ -13,12 +14,16 @@ import { setManagedMcpServerEnabled, setManagedMcpServerOverride } from './mcp-o
 import { getWebUiHome } from '../../studio/public/config'
 import { probeCodingAgentMcpConfig } from './mcp-runtime-isolation'
 
-const CODING_AGENT_IDS = new Set(['claude-code', 'codex', 'pi', 'grok', 'opencode'])
+const CODING_AGENT_IDS = new Set(['claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'])
 const STUDIO_MANAGED_NAMES = new Set([
   'hermes-studio-api',
   'hermes-studio-browser',
   'hermes-studio-devices',
   'hermes-studio-use',
+  'ekko-studio-api',
+  'ekko-studio-browser',
+  'ekko-studio-devices',
+  'ekko-studio-use',
 ])
 const MANAGED_ENV_KEY = 'HERMES_WEB_UI_MANAGED_MCP'
 
@@ -281,6 +286,8 @@ async function readServers(id: string, scope: CodingAgentConfigScope): Promise<{
   let servers: Map<string, Record<string, any>>
   if (id === 'claude-code' || id === 'pi') {
     servers = parseJsonDocument(file.content).servers
+  } else if (id === 'dsh') {
+    servers = readDshMcpServers(file.content)
   } else if (id === 'opencode') {
     servers = parseOpenCodeDocument(file.content).servers
   } else {
@@ -304,6 +311,10 @@ async function writeServer(
   config: Record<string, any> | null,
   scope: CodingAgentConfigScope,
 ): Promise<void> {
+  if (id === 'dsh') {
+    await writeCodingAgentConfigFile(id, configKey(id), updateDshMcpServer(originalContent, name, config), scope)
+    return
+  }
   if (id === 'claude-code' || id === 'pi') {
     const { root } = parseJsonDocument(originalContent)
     const persistedServers = isRecord(root.mcpServers) ? { ...root.mcpServers } : {}
@@ -334,6 +345,7 @@ async function writeServer(
 }
 
 function removeServerFromContent(id: string, content: string, name: string): string | null {
+  if (id === 'dsh') return readDshMcpServers(content).has(name) ? updateDshMcpServer(content, name, null) : null
   if (id === 'claude-code' || id === 'pi') {
     const { root } = parseJsonDocument(content)
     const persistedServers = isRecord(root.mcpServers) ? { ...root.mcpServers } : {}
@@ -359,7 +371,7 @@ function removeServerFromContent(id: string, content: string, name: string): str
 
 async function pruneScopedServerCopies(id: string, name: string): Promise<number> {
   const modelRoot = join(getWebUiHome(), 'coding-agent', 'model')
-  const fileName = id === 'claude-code' || id === 'pi'
+  const fileName = id === 'dsh' ? 'cordis.patch.yml' : id === 'claude-code' || id === 'pi'
     ? 'mcp.json'
     : id === 'opencode'
       ? 'opencode.json'
@@ -447,7 +459,8 @@ export async function upsertCodingAgentMcpServer(
   config: Record<string, any>,
   scope: CodingAgentConfigScope = {},
 ): Promise<{ ok: true; name: string }> {
-  const normalizedName = name.trim()
+  assertAgentId(id)
+  const normalizedName = name.trim().replace(/^hermes-studio-(api|browser|devices|use)$/, 'ekko-studio-$1')
   if (!normalizedName || normalizedName.length > 128 || /[/\\\x00-\x1f]/.test(normalizedName)) {
     const error = new Error('Valid server name is required')
     ;(error as any).status = 400
@@ -477,6 +490,7 @@ export async function upsertCodingAgentMcpServer(
       ;(error as any).status = 400
       throw error
     }
+    if (id === 'dsh') validateDshMcpServer(normalizedName, config)
     setManagedMcpServerOverride(
       id,
       profile,
@@ -497,6 +511,7 @@ export async function upsertCodingAgentMcpServer(
     ;(error as any).status = 400
     throw error
   }
+  if (id === 'dsh') validateDshMcpServer(normalizedName, config)
   const current = await readServers(id, scope)
   await writeServer(id, current.content, normalizedName, normalizeConfig(config), scope)
   return { ok: true, name: normalizedName }
@@ -534,5 +549,10 @@ export async function testCodingAgentMcpServer(
   if (!config) return { ok: false, error: `MCP server not found: ${name}` }
   if (config.enabled === false) return { ok: false, error: 'Enable the MCP server before testing it' }
 
+  if (id === 'dsh') {
+    try { assertDshMcpProbeIsLiteral(current.content, name) } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
   return probeCodingAgentMcpConfig(config)
 }
