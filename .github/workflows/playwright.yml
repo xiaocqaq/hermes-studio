@@ -1,12 +1,8 @@
 name: Playwright
 
+# 这个 fork 不跑上游的 e2e。push 到 main 会把它带红，改成手动触发。
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read

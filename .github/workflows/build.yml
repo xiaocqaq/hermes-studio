@@ -1,13 +1,9 @@
 name: Build
 
+# 这个 fork 只发自定义前端，不跑上游的整仓构建/覆盖率。
+# push 到 main 会把它们带红，改成手动触发。
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-      - base
+  workflow_dispatch:
 
 permissions:
   contents: read
