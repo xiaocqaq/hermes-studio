@@ -44,7 +44,13 @@ done
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-ssh_() { ssh -o BatchMode=yes "$DEPLOY_HOST" "$@"; }
+# CI 把专用 key 写到 SSH_IDENTITY；本地不设则走 ssh 默认身份。
+# IdentitiesOnly 避免 runner 上其它 key 先被试、撞上 MaxAuthTries。
+ssh_opts=(-o BatchMode=yes)
+if [ -n "${SSH_IDENTITY:-}" ]; then
+  ssh_opts+=(-o IdentitiesOnly=yes -i "$SSH_IDENTITY")
+fi
+ssh_() { ssh "${ssh_opts[@]}" "$DEPLOY_HOST" "$@"; }
 
 # ---------------------------------------------------------------- 1. 构建
 if [ "$SKIP_BUILD" -eq 0 ]; then
@@ -67,7 +73,7 @@ LOCAL_TARBALL="$(mktemp -d)/${NAME}"
 
 echo "==> 打包上传 ${NAME}"
 tar -czf "$LOCAL_TARBALL" -C dist client
-scp -o BatchMode=yes -q "$LOCAL_TARBALL" "${DEPLOY_HOST}:${INCOMING_DIR}/${NAME}"
+scp "${ssh_opts[@]}" -q "$LOCAL_TARBALL" "${DEPLOY_HOST}:${INCOMING_DIR}/${NAME}"
 rm -rf "$(dirname "$LOCAL_TARBALL")"
 
 # ---------------------------------------------------------------- 3. 触发发布

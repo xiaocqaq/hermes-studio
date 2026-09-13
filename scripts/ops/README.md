@@ -1,7 +1,8 @@
 # scripts/ops — hermes-web-ui 服务器运维脚本
 
-针对生产机 `hs.xlingo.fun` 的两类防护：**SQLite 损坏**（2026-08 事故）和**内存/OOM**
-（2026-09 事故）。**升级后需要重跑安装脚本**，原因见下。
+针对生产机 `hs.xlingo.fun` 的三类运维：**SQLite 损坏**（2026-08 事故）、**内存/OOM**
+（2026-09 事故）、**前端发布**（nginx 切 root，不碰后端）。数据库/内存相关脚本
+**升级后需要重跑**，原因见下。
 
 ## 快速用法
 
@@ -18,6 +19,9 @@
 
 # 换机器
 DEPLOY_HOST=root@1.2.3.4 ./scripts/ops/install-db-guard.sh
+
+# 前端发布（本地或 CI 共用同一条接收端）
+DEPLOY_HOST=deploy@115.159.206.76 bash scripts/deploy-frontend.sh
 ```
 
 服务器上的日常命令：
@@ -35,6 +39,46 @@ journalctl -u earlyoom | grep "sending SIG"   # 谁被 earlyoom 杀了
 set-studio-mcp-enabled.py hermes-studio-browser false --dry-run
 set-studio-mcp-enabled.py hermes-studio-browser false && systemctl restart hermes-webui
 ```
+
+## 前端发布（GitHub Actions）
+
+线上前端不是 npm 包里的 `dist/client`，nginx 的 `root` 指向
+`/www/wwwroot/hs.xlingo.fun/releases/<时间戳>-frontend`。发布 = 传一个新目录 +
+改 vhost root + `nginx -s reload`。**绝不碰后端**：不跑 `npm i -g`，不
+`systemctl restart hermes-webui`。后端升级仍是另一件事，攒到手头没有正在跑的
+会话时单独做。
+
+vhost conf 是 `0600 root`，所以特权那一半收进一个 root 脚本，CI 只能「扔
+tarball + sudo 调这一个脚本」：
+
+| 角色 | 能做的事 |
+|---|---|
+| `scripts/deploy-frontend.sh`（本地 / Actions） | 构建、打包、scp 到 `incoming/`、`sudo -n hermes-frontend-release` |
+| `scripts/ops/hermes-frontend-release`（root，0755） | 校验 tarball、落盘、切 root、reload、自检重试、失败回滚、清理旧 release |
+| `deploy` 用户 | 只能写 `incoming/`，sudo 白名单只有那一条命令 |
+
+装接收端（一次性，root 跑）：
+
+```bash
+bash scripts/ops/install-deploy-user.sh --pubkey-file /root/deploy.pub
+bash scripts/ops/install-deploy-user.sh --show
+```
+
+GitHub secrets（仓库 Settings → Secrets → Actions）：
+
+| Name | Value |
+|---|---|
+| `DEPLOY_SSH_KEY` | `~/.ssh/hermes-deploy` 私钥全文 |
+| `DEPLOY_HOST` | `deploy@115.159.206.76` |
+| `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan -t ed25519,rsa 115.159.206.76` 的输出 |
+
+workflow 是 `.github/workflows/deploy-frontend.yml`，先只挂 `workflow_dispatch`。
+跑顺几次再加 `push: branches: [custom]`。fork 来的 PR 拿不到这些 secret，
+`if: github.repository == 'xiaocqaq/hermes-studio'` 再挡一层。
+
+自检会轮询最多 15 次 × 2s：`nginx -s reload` 是优雅切换，老 worker 不会瞬间
+换 root，紧跟 reload 探一次会命中假 404。超时才回滚。旧脚本那条路径是直接
+`exit 1` 不回滚。
 
 ## 历史：runtime-versions 权限问题（0.7.1，已由上游修掉）
 

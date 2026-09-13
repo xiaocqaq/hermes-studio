@@ -69,16 +69,17 @@ jobs:
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_HOST_KEY: ${{ secrets.DEPLOY_HOST_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           [ -n "$DEPLOY_KEY" ] || { echo '!! 缺少 secret DEPLOY_SSH_KEY' >&2; exit 1; }
           [ -n "$DEPLOY_HOST" ] || { echo '!! 缺少 secret DEPLOY_HOST' >&2; exit 1; }
+          [ -n "$DEPLOY_KNOWN_HOSTS" ] || { echo '!! 缺少 secret DEPLOY_KNOWN_HOSTS' >&2; exit 1; }
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          # GitHub secret 从网页贴进来时偶尔带 CR，OpenSSH 会直接拒
+          printf '%s\n' "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # 固定 host key，不用 StrictHostKeyChecking=no —— 那等于接受任何中间人
-          printf '%s\n' "$DEPLOY_HOST_KEY" > ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy
@@ -86,6 +87,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
           set -euo pipefail
+          export SSH_IDENTITY="${HOME}/.ssh/id_ed25519"
           # --skip-build：上面已经构建过，不要再花一遍时间
           bash scripts/deploy-frontend.sh --skip-build --keep '${{ inputs.keep }}'
 
