@@ -13,6 +13,7 @@ vi.mock('@/api/studio/chat', () => ({
   respondToolApproval: vi.fn(), respondClarify: vi.fn(),
   onPeerUserMessage: vi.fn(), onSessionCommand: vi.fn(),
   onSessionTitleUpdated: vi.fn(), onSessionWorkspaceUpdated: vi.fn(), onSessionSettingsUpdated: vi.fn(),
+  onSessionActivity: vi.fn(() => vi.fn()),
 }))
 vi.mock('@/api/client', () => ({ getActiveProfileName: () => 'default', hasApiKey: () => false }))
 vi.mock('@/api/studio/sessions', () => ({
@@ -52,7 +53,9 @@ describe('sidebar working state', () => {
       callback({ session_id: sid, isWorking: false, messages: [], events: [], backgroundPending: 1 })
     })
     onVisible()
-    expect(store.isSessionWorking('one')).toBe(true)
+    // The handler live-syncs the session list before it resumes, so the state it
+    // recovers lands a few microtasks after the event fires.
+    await vi.waitFor(() => expect(store.isSessionWorking('one')).toBe(true))
     expect(store.isSessionLive('one')).toBe(false)
     expect(api.registerSessionHandlers).toHaveBeenCalledTimes(1)
     const handlers = api.registerSessionHandlers.mock.calls[0][1]

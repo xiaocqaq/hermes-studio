@@ -5662,7 +5662,10 @@ export const useChatStore = defineStore('chat', () => {
         markCacheBaseline(sid, target.messageTotal)
         persistSessionCache(sid)
       }
-      resumeServerWorkingRun(sid)
+      // Same shape as the switch path above: a background-only resume still needs
+      // its passive listener, or the delegation telemetry the sidebar is waiting
+      // on never arrives and the session reads idle until the next reload.
+      resumeServerWorkingRun(sid, (data.backgroundPending || 0) > 0, !data.isWorking)
     }, sessions.value.find(s => s.id === sid)?.profile, runtimeTransport())
   }
 
@@ -5680,7 +5683,14 @@ export const useChatStore = defineStore('chat', () => {
         // An idle session usually needs nothing at all here; only fall back to the
         // 150-message replay when the tail cannot be reconciled, or when a run is
         // in flight and we need its live state.
-        if (!serverWorking.value.has(sid)) {
+        //
+        // The tail reconciles messages only — run and delegation state ride on
+        // socket events. That holds as long as the socket did, but a tab parked in
+        // the background routinely loses it, and only runs this tab started re-resume
+        // on reconnect (see `onReconnectResume`). A delegation started elsewhere
+        // would leave the sidebar reading idle for the rest of its life, so a dead
+        // socket always earns the full replay.
+        if (!serverWorking.value.has(sid) && getChatRunSocket(runtimeTransport())?.connected) {
           const status = await syncSessionTail(sid)
           if (status === 'fresh' || status === 'updated') return
         }
