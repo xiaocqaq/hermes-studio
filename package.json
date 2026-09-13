@@ -1,17 +1,22 @@
 {
   "name": "hermes-web-ui",
-  "version": "0.7.14",
-  "description": "Self-hosted AI chat dashboard for Hermes Agent — multi-model web UI with multi-platform integration",
+  "version": "0.7.21",
+  "description": "Ekko Studio is a local-first AI workspace for multi-agent chat, coding, and visual workflows, available on desktop and the web.",
   "repository": {
     "type": "git",
     "url": "https://github.com/EKKOLearnAI/hermes-studio.git"
   },
-  "homepage": "https://hermes-studio.ai",
+  "homepage": "https://ekkostudio.xyz",
   "license": "BSL-1.1",
   "engines": {
     "node": ">=23.0.0"
   },
   "keywords": [
+    "ekko-studio",
+    "ekko-agent",
+    "multi-agent",
+    "coding-agents",
+    "workflow-automation",
     "hermes",
     "hermes-agent",
     "hermes-web",
@@ -31,8 +36,9 @@
   ],
   "bin": {
     "hermes-web-ui": "./bin/hermes-web-ui.mjs",
-    "hermes-web-ui-mcp": "./bin/hermes-studio-mcp.mjs",
-    "hermes-studio-mcp": "./bin/hermes-studio-mcp.mjs"
+    "hermes-web-ui-mcp": "./bin/hermes-web-ui-mcp.mjs",
+    "hermes-studio-mcp": "./bin/hermes-studio-mcp.mjs",
+    "ekko-studio-mcp": "./bin/ekko-studio-mcp.mjs"
   },
   "scripts": {
     "start": "vite --host --port 8648",
@@ -85,6 +91,7 @@
     "@vue-flow/node-resizer": "^1.5.1",
     "adm-zip": "^0.6.0",
     "agent-browser": "^0.26.0",
+    "boring-avatars-vanilla": "^1.0.2",
     "eventsource": "^4.1.0",
     "js-tiktoken": "^1.0.21",
     "katex": "^0.17.0",
@@ -92,8 +99,10 @@
     "node-pty": "^1.1.0",
     "sharp": "^0.35.3",
     "sherpa-onnx-node": "1.13.3",
+    "smol-toml": "^1.8.0",
     "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "yaml": "^2.9.0"
   },
   "optionalDependencies": {
     "sherpa-onnx-darwin-arm64": "1.13.3",
@@ -108,7 +117,6 @@
     "@koa/bodyparser": "^5.0.0",
     "@koa/cors": "^5.0.0",
     "@koa/router": "^15.4.0",
-    "@multiavatar/multiavatar": "^1.0.7",
     "@pinia/testing": "^1.0.3",
     "@playwright/test": "^1.60.0",
     "@types/adm-zip": "^0.5.8",

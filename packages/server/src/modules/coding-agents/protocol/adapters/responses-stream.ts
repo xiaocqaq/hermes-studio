@@ -12,6 +12,78 @@ export interface CanonicalResponsesEvent {
   data: Record<string, unknown>
 }
 
+function normalizeResponseContentPart(part: unknown): unknown {
+  if (!part || typeof part !== 'object' || Array.isArray(part)) return part
+  const content = part as Record<string, unknown>
+  // Grok's typed Responses decoder requires this array even without citations.
+  if (content.type !== 'output_text' || content.annotations != null) return part
+  return { ...content, annotations: [] }
+}
+
+function normalizeResponseOutputItem(item: unknown): unknown {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return item
+  const output = item as Record<string, unknown>
+  if (!Array.isArray(output.content)) return item
+  return { ...output, content: output.content.map(normalizeResponseContentPart) }
+}
+
+/**
+ * Fill wire fields required by strict Responses API clients such as Grok Build.
+ * Some upstream OpenAI-compatible providers omit these fields, while clients
+ * based on the typed Responses schema reject the entire SSE frame without them.
+ */
+export async function* normalizeResponsesSseEvents(
+  events: AsyncIterable<CanonicalResponsesEvent>,
+): AsyncGenerator<CanonicalResponsesEvent> {
+  let nextSequenceNumber = 0
+  const createdAtByResponseId = new Map<string, number>()
+
+  for await (const event of events) {
+    const currentSequenceNumber = Number(event.data.sequence_number)
+    const sequenceNumber = Number.isSafeInteger(currentSequenceNumber) && currentSequenceNumber >= 0
+      ? currentSequenceNumber
+      : nextSequenceNumber
+    nextSequenceNumber = Math.max(nextSequenceNumber, sequenceNumber + 1)
+
+    const data = {
+      ...event.data,
+      sequence_number: sequenceNumber,
+      ...(event.data.part ? { part: normalizeResponseContentPart(event.data.part) } : {}),
+      ...(event.data.item ? { item: normalizeResponseOutputItem(event.data.item) } : {}),
+    }
+    const response = event.data.response
+    if (!response || typeof response !== 'object' || Array.isArray(response)) {
+      yield {
+        ...event,
+        data,
+      }
+      continue
+    }
+
+    const responseRecord = response as Record<string, unknown>
+    const responseId = String(responseRecord.id || '')
+    const currentCreatedAt = Number(responseRecord.created_at)
+    const createdAt = Number.isSafeInteger(currentCreatedAt) && currentCreatedAt >= 0
+      ? currentCreatedAt
+      : createdAtByResponseId.get(responseId) ?? Math.floor(Date.now() / 1000)
+    if (responseId) createdAtByResponseId.set(responseId, createdAt)
+
+    yield {
+      ...event,
+      data: {
+        ...data,
+        response: {
+          ...responseRecord,
+          created_at: createdAt,
+          ...(Array.isArray(responseRecord.output)
+            ? { output: responseRecord.output.map(normalizeResponseOutputItem) }
+            : {}),
+        },
+      },
+    }
+  }
+}
+
 function safeJsonParse(value: string): any {
   try {
     return JSON.parse(value)
@@ -47,6 +119,7 @@ function functionCallItem(input: {
     call_id: input.callId || input.id,
     name: normalized.name,
     arguments: normalized.arguments,
+    status: input.status || 'completed',
     ...(namespace ? { namespace } : {}),
   }
 }

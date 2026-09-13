@@ -116,7 +116,8 @@ describe('group Agent presets', () => {
 
     const created = createGroupAgentPreset({
       ownerUserId: 7,
-      agent: 'codex',
+      agent: 'dsh',
+      agentPreset: 'minimal',
       profile: 'research',
       provider: 'openai',
       model: 'gpt-test',
@@ -179,6 +180,40 @@ describe('group Agent presets', () => {
       models: ['gpt-test'],
       model_meta: { 'gpt-test': { disabled: true } },
     }])).toThrow(/unavailable/i)
+  })
+
+  it('normalizes global CLI presets without persisting scoped model configuration', async () => {
+    const {
+      normalizeGroupAgentPresetInput,
+      validateGroupAgentPresetCapability,
+    } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-presets')
+
+    const preset = normalizeGroupAgentPresetInput({
+      agent: 'codex',
+      agentMode: 'global',
+      profile: 'research',
+      provider: 'must-not-persist',
+      model: 'must-not-persist',
+      apiMode: 'chat_completions',
+      reasoningEffort: 'high',
+      name: 'Global Reviewer',
+      description: '',
+      avatar: '',
+    })
+    expect(preset).toMatchObject({
+      agent: 'codex',
+      agentMode: 'global',
+      provider: '',
+      model: '',
+      apiMode: '',
+      reasoningEffort: '',
+    })
+    expect(() => validateGroupAgentPresetCapability(preset, [])).not.toThrow()
+    expect(() => normalizeGroupAgentPresetInput({
+      ...preset,
+      agent: 'ekko',
+      name: 'Invalid Global Ekko',
+    })).toThrow(/global mode is only available/i)
   })
 
   it('marks presets unavailable when their Agent is not installed', async () => {

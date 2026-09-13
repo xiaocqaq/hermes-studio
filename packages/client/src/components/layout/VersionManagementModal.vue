@@ -8,7 +8,6 @@ import {
   downloadRuntimeVersion,
   fetchRuntimeVersionStatus,
   fetchVersionDownloadJobs,
-  restartWebUiAfterRuntimeChange,
   selectRuntimeRoot,
   type InstalledRuntimeVersion,
   type RuntimeVersionStatus,
@@ -18,6 +17,7 @@ import {
   type VersionDownloadSource,
 } from '@/api/hermes/runtime-versions'
 import HermesDataDirectoryHint from '@/components/hermes/HermesDataDirectoryHint.vue'
+import { useRuntimeRestartPrompt } from '@/composables/useRuntimeRestartPrompt'
 import { desktopBridge } from '@/utils/desktop-bridge'
 
 const props = defineProps<{ show: boolean }>()
@@ -25,6 +25,7 @@ const emit = defineEmits<{ (event: 'update:show', value: boolean): void }>()
 
 const { t } = useI18n()
 const message = useMessage()
+const { requestRuntimeRestart, checkRuntimeDownloads } = useRuntimeRestartPrompt()
 
 const status = ref<RuntimeVersionStatus | null>(null)
 const jobs = ref<VersionDownloadJob[]>([])
@@ -33,7 +34,6 @@ const actionLoading = ref<Record<string, boolean>>({})
 const loadError = ref('')
 const cliDetailsShow = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let restartWaitTimer: ReturnType<typeof setInterval> | null = null
 
 const canSelectRuntimeDirectory = computed(() => typeof desktopBridge()?.selectRuntimeDirectory === 'function')
 const isDefaultRuntimeDirectory = computed(() => {
@@ -73,7 +73,6 @@ watch(() => props.show, show => {
 
 onBeforeUnmount(() => {
   stopPolling()
-  if (restartWaitTimer) clearInterval(restartWaitTimer)
 })
 
 function updateShow(show: boolean) {
@@ -90,6 +89,7 @@ async function loadAll() {
   loadError.value = ''
   try {
     await Promise.all([loadStatus(), loadJobs()])
+    checkRuntimeDownloads()
     if (hasRunningJobs()) startPolling()
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : String(err)
@@ -120,40 +120,6 @@ async function refreshJobs() {
   } catch {
     stopPolling()
   }
-}
-
-async function restartRuntimeHost() {
-  const bridge = desktopBridge()
-  if (bridge?.isDesktop === true) {
-    if (!bridge.restartApp) throw new Error('Desktop restart is unavailable')
-    await bridge.restartApp()
-    return
-  }
-  await restartWebUiAfterRuntimeChange()
-  waitForWebUiRestart()
-}
-
-function waitForWebUiRestart() {
-  let attempts = 0
-  let sawUnavailable = false
-  restartWaitTimer = setInterval(async () => {
-    attempts += 1
-    try {
-      const response = await fetch('/health', { cache: 'no-store' })
-      if (response.ok && (sawUnavailable || attempts >= 15)) {
-        if (restartWaitTimer) clearInterval(restartWaitTimer)
-        restartWaitTimer = null
-        window.location.reload()
-      }
-    } catch {
-      sawUnavailable = true
-    }
-    if (attempts >= 60) {
-      if (restartWaitTimer) clearInterval(restartWaitTimer)
-      restartWaitTimer = null
-      window.location.reload()
-    }
-  }, 1000)
 }
 
 function startPolling() {
@@ -250,6 +216,7 @@ async function startRuntimeDownload(version: string, source: VersionDownloadSour
   await runAction(`download-runtime-${source}-${version}`, async () => {
     const response = await downloadRuntimeVersion(version, source)
     jobs.value = [response.job, ...jobs.value.filter(job => job.id !== response.job.id)]
+    checkRuntimeDownloads()
     message.success(t('runtimeVersions.downloadStarted'))
     startPolling()
   })
@@ -259,7 +226,7 @@ async function useRuntime(version: string) {
   await runAction(`activate-runtime-${version}`, async () => {
     await activateRuntimeVersion(version)
     message.success(t('runtimeVersions.activateSuccess'))
-    await restartRuntimeHost()
+    requestRuntimeRestart(version)
   })
 }
 
@@ -378,7 +345,7 @@ async function removeRuntime(version: string) {
           >
             <div class="runtime-update-note">
               <span>{{ t('runtimeVersions.cliUpdateDescription') }}</span>
-              <code>hermes-studio cli update</code>
+              <code>ekko-studio cli update</code>
             </div>
           </NAlert>
           <div class="runtime-directory-control">

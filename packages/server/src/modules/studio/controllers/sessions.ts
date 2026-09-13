@@ -1,3 +1,4 @@
+import { getSessionTaskPlans } from '../services/task-plans'
 import {
   deleteHermesSessionForProfile,
   getHermesCliSession,
@@ -11,9 +12,11 @@ import {
   listHermesSessionSummaryGroups,
   notifyHermesSessionModelChanged,
   stopCodingAgentSessionRun,
+  invalidateCodingAgentSessionRuntime,
 } from '../public/session-agent-runtime'
 import {
   listSessions as localListSessions,
+  countSessions as localCountSessions,
   searchSessions as localSearchSessions,
   getSession as localGetSession,
   getSessionDetail as localGetSessionDetail,
@@ -42,24 +45,29 @@ import {
 import type { UsageStatsAgentRow, UsageStatsModelRow, UsageStatsDailyRow } from '../public/sessions'
 import { deleteWorkspaceRunChangesForSession, getWorkspaceRunChangeFile as getWorkspaceRunChangeFileFromDb, listWorkspaceRunChangesForAssistantMessages, listWorkspaceRunChangesForSession } from '../public/sessions'
 import { getActiveProfileDir, getActiveProfileName, getProfileDir, listProfileNamesFromDisk, readConfigYamlForProfile } from '../public/profile-config'
-import { isNearestExistingRealPathWithin, isPathWithin, relativePathFromBase, validatePath } from '../services/files/path'
+import { isNearestExistingRealPathWithin, isPathWithin, relativePathFromBase } from '../services/files/path'
 import {
   isWorkspaceListPathAllowed,
   normalizeWindowsWorkspacePath,
   useWindowsDriveWorkspaceMode,
-  workspaceBaseOverride,
 } from '../services/files/workspace-path'
 import { getGroupChatServer } from './group-chat'
 import { logger } from '../public/logging'
 import { isHermesAgentAvailable } from '../public/agent-status-registry'
 import { listUserProfiles } from '../public/users'
-import { defaultHermesWorkspace, ensureHermesRunWorkspace } from '../services/chat-run/workspace'
+import { ensureHermesRunWorkspace } from '../services/chat-run/workspace'
+import {
+  isAbsoluteWorkspacePath,
+  resolveWorkspacePath,
+  workspaceBaseDirectory,
+  workspaceRelativePath,
+} from '../services/workspace/manager'
 import { getChatRunServer } from '../services/chat-run/server-registry'
 import { isSensitivePath, MAX_DOWNLOAD_SIZE, MAX_EDIT_SIZE } from '../services/files/file-policy'
 import { buildFileContentHeaders, getFilePreviewDescriptor } from '../services/files/file-preview'
 import { decorateWorkspaceEntries, getWorkspaceFileGitDiff } from '../services/files/workspace-git-status'
 import { copyFile, mkdir, readFile, readdir, rename as fsRename, rm as fsRm, stat as fsStat, writeFile } from 'fs/promises'
-import { relative, normalize as pathNormalize, resolve as pathResolve } from 'path'
+import { normalize as pathNormalize, resolve as pathResolve } from 'path'
 
 function getPendingDeletedSessionIds(): Set<string> {
   return getGroupChatServer()?.getStorage().getPendingDeletedSessionIds() || new Set<string>()
@@ -179,7 +187,7 @@ function mergeHermesHistorySessions(
   const importedIds = new Set(localSessions.map(session => session.id))
   const historySessionsById = new Map<string, any>()
   // Keep Hermes Agent state.db as the canonical summary when both stores have
-  // the same id. Hermes Studio contributes import/archive state and local-only
+  // the same id. Ekko Studio contributes import/archive state and local-only
   // coding-agent sessions without replacing the Agent-owned session fields.
   for (const session of hermesSessions) {
     historySessionsById.set(session.id, {
@@ -212,6 +220,8 @@ function isCodingAgentSession(session?: { source?: string | null; agent?: string
     session?.agent === 'claude' ||
     session?.agent === 'codex' ||
     session?.agent === 'pi' ||
+    session?.agent === 'grok' ||
+    session?.agent === 'opencode' ||
     Boolean(session?.agent_session_id)
 }
 
@@ -403,6 +413,7 @@ export async function listConversations(ctx: any) {
     agent_mode: s.agent_mode,
     agent_session_id: s.agent_session_id,
     agent_native_session_id: s.agent_native_session_id,
+    agent_preset: s.agent_preset,
     model: s.model,
     provider: s.provider,
     api_mode: s.api_mode,
@@ -466,23 +477,49 @@ export async function list(ctx: any) {
   const limit = ctx.query.limit ? parseInt(ctx.query.limit as string, 10) : undefined
   const profile = explicitProfileFilter(ctx)
   const effectiveLimit = limit && limit > 0 ? limit : 2000
+  const paginated = ctx.query.offset !== undefined
+  const requestedOffset = Number(ctx.query.offset)
+  const offset = Number.isSafeInteger(requestedOffset) && requestedOffset > 0 ? requestedOffset : 0
+  const category = ctx.query.category
+  const categoryId = category === 'none' ? null : category === undefined ? undefined : Number(category)
+  if (categoryId !== undefined && categoryId !== null && (!Number.isSafeInteger(categoryId) || categoryId <= 0)) {
+    ctx.status = 400
+    ctx.body = { error: 'category must be a positive integer or none' }
+    return
+  }
+  const readIds = (raw: unknown): string[] => (Array.isArray(raw) ? raw : raw ? [raw] : [])
+    .map(value => String(value).trim()).filter(Boolean)
+  const includedIds = ctx.query.include === undefined ? undefined : readIds(ctx.query.include)
+  const excludedIds = readIds(ctx.query.exclude)
 
   const knownProfiles = profile ? null : new Set(listProfileNamesFromDisk())
   const allowedProfiles = allowedProfileSet(ctx)
   const visibleProfiles = knownProfiles
     ? [...knownProfiles].filter(name => !allowedProfiles || allowedProfiles.has(name))
     : undefined
-  const allSessions = localListSessions(profile, source, effectiveLimit, {
+  const listOptions = {
+    ...(categoryId !== undefined ? { categoryId } : {}),
+    ...(includedIds !== undefined ? { includeSessionIds: includedIds } : {}),
     sources: source ? undefined : requestedSessionSources(),
     profiles: visibleProfiles,
     includeArchived: false,
-    excludeSessionIds: [...getPendingDeletedSessionIds()],
+    excludeSessionIds: [...getPendingDeletedSessionIds(), ...excludedIds],
+  }
+  const allSessions = localListSessions(profile, source, effectiveLimit + (paginated ? 1 : 0), {
+    ...listOptions,
+    ...(paginated ? { offset } : {}),
   })
-  ctx.body = {
-    sessions: filterPendingDeletedSessions(filterArchivedSessions(filterByAllowedProfiles(ctx, allSessions).filter(s =>
+  const sessions = filterPendingDeletedSessions(filterArchivedSessions(filterByAllowedProfiles(ctx, allSessions).filter(s =>
       isRequestedSessionSource(source, s.source) &&
       (!knownProfiles || knownProfiles.has(s.profile || 'default')),
-    ))),
+    )))
+  ctx.body = {
+    sessions: paginated ? sessions.slice(0, effectiveLimit) : sessions,
+    ...(paginated ? {
+      hasMore: sessions.length > effectiveLimit, offset, limit: effectiveLimit,
+      total: profile && allowedProfiles && !allowedProfiles.has(profile)
+        ? 0 : localCountSessions(profile, source, listOptions),
+    } : {}),
   }
 }
 
@@ -734,18 +771,7 @@ function normalizeWorkspaceRelativePath(value: unknown, options: { allowEmpty?: 
   const raw = typeof value === 'string' ? value.trim() : ''
   if (!raw && options.allowEmpty) return ''
   if (!raw) throw Object.assign(new Error('Missing path parameter'), { code: 'missing_path', status: 400 })
-  if (raw.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(raw)) {
-    throw Object.assign(new Error('Invalid file path'), { code: 'invalid_path', status: 400 })
-  }
-  const normalized = pathNormalize(raw).replace(/\\/g, '/')
-  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) {
-    throw Object.assign(new Error('Invalid file path'), { code: 'invalid_path', status: 400 })
-  }
-  return normalized
-}
-
-function workspaceRelativePath(workspace: string, fullPath: string): string {
-  return relative(workspace, fullPath).replace(/\\/g, '/')
+  return isAbsoluteWorkspacePath(raw) ? raw : pathNormalize(raw).replace(/\\/g, '/')
 }
 
 function sessionWorkspacePrefix(workspace: string, profile?: string | null): string {
@@ -776,12 +802,14 @@ async function resolveSessionWorkspacePath(
   if (denySessionAccess(ctx, session)) throw Object.assign(new Error('Forbidden'), { code: 'forbidden', status: 403, handled: true })
   const workspace = String(session.workspace || '').trim()
   if (!workspace) throw Object.assign(new Error('Session workspace not found'), { code: 'workspace_not_found', status: 404 })
-  const relativePath = normalizeSessionWorkspaceRelativePath(workspace, session.profile, relativePathValue, options)
-  const fullPath = pathResolve(workspace, relativePath)
-  if (!isPathWithin(fullPath, workspace) || !await isNearestExistingRealPathWithin(fullPath, workspace)) {
-    throw Object.assign(new Error('Invalid file path'), { code: 'invalid_path', status: 400 })
-  }
-  return { session, relativePath, fullPath, workspace }
+  const path = normalizeSessionWorkspaceRelativePath(workspace, session.profile, relativePathValue, options)
+  const resolved = await resolveWorkspacePath(workspace, path, {
+    access: 'unrestricted',
+    allowAbsolute: true,
+    allowEmpty: options.allowEmpty,
+    missingWorkspaceMessage: 'Session workspace not found',
+  })
+  return { session, ...resolved }
 }
 
 async function resolveSessionWorkspaceFile(ctx: any, relativePathValue: unknown) {
@@ -789,35 +817,7 @@ async function resolveSessionWorkspaceFile(ctx: any, relativePathValue: unknown)
 }
 
 async function resolveSessionPreviewFile(ctx: any, pathValue: unknown) {
-  const rawPath = typeof pathValue === 'string' ? pathValue.trim() : ''
-  const isAbsolutePath = rawPath.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(rawPath)
-  if (!isAbsolutePath) return resolveSessionWorkspaceFile(ctx, pathValue)
-
-  const session = localGetSession(ctx.params.id)
-  if (!session) throw Object.assign(new Error('Session not found'), { code: 'not_found', status: 404 })
-  if (denySessionAccess(ctx, session)) throw Object.assign(new Error('Forbidden'), { code: 'forbidden', status: 403, handled: true })
-
-  const fullPath = validatePath(rawPath)
-  const roots = [
-    String(session.workspace || '').trim(),
-    defaultHermesWorkspace(String(session.profile || 'default')),
-  ].filter(Boolean)
-
-  for (const root of roots) {
-    if (isPathWithin(fullPath, root) && await isNearestExistingRealPathWithin(fullPath, root)) {
-      return {
-        session,
-        relativePath: workspaceRelativePath(root, fullPath),
-        fullPath,
-        workspace: root,
-      }
-    }
-  }
-
-  throw Object.assign(new Error('File is outside the session and Hermes workspaces'), {
-    code: 'invalid_path',
-    status: 400,
-  })
+  return resolveSessionWorkspaceFile(ctx, pathValue)
 }
 
 function handleWorkspaceFileError(ctx: any, err: any): void {
@@ -1603,6 +1603,7 @@ export async function setReasoningEffort(ctx: any) {
   }
 
   localUpdateSession(id, { reasoning_effort: reasoningEffort })
+  if (existing.agent === 'grok') invalidateCodingAgentSessionRuntime(id)
   getChatRunServer()?.emitSessionSettingsUpdated(id, {
     reasoning_effort: reasoningEffort,
   })
@@ -1756,7 +1757,6 @@ export async function listWorkspaceFolders(ctx: any) {
   const { resolve, join, win32 } = await import('path')
   const { readdir, stat } = await import('fs/promises')
   const { existsSync } = await import('fs')
-  const { homedir } = await import('os')
 
   const subPath = (ctx.query.path as string) || ''
   if (useWindowsDriveWorkspaceMode()) {
@@ -1807,7 +1807,7 @@ export async function listWorkspaceFolders(ctx: any) {
     return
   }
 
-  const WORKSPACE_BASE = workspaceBaseOverride() || homedir()
+  const WORKSPACE_BASE = workspaceBaseDirectory()
 
   // Security: prevent path traversal
   const fullPath = resolve(join(WORKSPACE_BASE, subPath))
@@ -1861,7 +1861,6 @@ function invalidWorkspaceFolderName(name: string): boolean {
 
 async function resolveWorkspaceFolderPath(ctx: any, inputPath: string) {
   const { resolve, join } = await import('path')
-  const { homedir } = await import('os')
   if (useWindowsDriveWorkspaceMode()) {
     const resolved = normalizeWindowsWorkspacePath(inputPath)
     if (!resolved) {
@@ -1872,7 +1871,7 @@ async function resolveWorkspaceFolderPath(ctx: any, inputPath: string) {
     return resolved
   }
 
-  const WORKSPACE_BASE = workspaceBaseOverride() || homedir()
+  const WORKSPACE_BASE = workspaceBaseDirectory()
   const fullPath = resolve(join(WORKSPACE_BASE, inputPath || ''))
   if (!isPathWithin(fullPath, WORKSPACE_BASE)) {
     ctx.status = 403
@@ -2117,6 +2116,7 @@ export async function getConversationMessagesPaginated(ctx: any) {
       output_tokens: session.output_tokens,
     },
     messages: result.messages,
+    taskPlans: getSessionTaskPlans(ctx.params.id, result.messages, offset === 0),
     workspaceRunChanges: listWorkspaceRunChangesForAssistantMessages(ctx.params.id, assistantMessageIds),
     total: result.total,
     offset: result.offset,

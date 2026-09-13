@@ -33,6 +33,7 @@ import {
   withDesktopHermesSelection,
   type DesktopManagedHermesRuntime,
 } from './hermes-environment-selection'
+import { canBindTcpPort, releaseOccupiedWebUiPort } from './webui-port'
 
 const DEFAULT_PORT = 8748
 const DEFAULT_READY_TIMEOUT_MS = 120_000
@@ -42,22 +43,31 @@ const DEFAULT_GRACEFUL_STOP_TIMEOUT_MS = 18_000
 const FORCE_KILL_COMMAND_TIMEOUT_MS = 5_000
 const AGENT_BRIDGE_STARTED_MARKER = '[bootstrap] agent bridge started'
 const AGENT_BRIDGE_FAILED_MARKER = '[bootstrap] agent bridge failed to start'
+const DESKTOP_RESTART_REQUEST = 'hermes-desktop:restart-app'
 const execFileAsync = promisify(execFile)
 
 let serverProc: ChildProcess | null = null
 let cachedToken: string | null = null
 let currentServerPort = DEFAULT_PORT
-let runtimeRestartHandler: (() => void) | null = null
 let unexpectedExitHandler: ((details: { code: number | null; signal: NodeJS.Signals | null }) => void) | null = null
-
-export function setWebUiRuntimeRestartHandler(handler: (() => void) | null): void {
-  runtimeRestartHandler = handler
-}
+let restartRequestHandler: (() => void) | null = null
 
 export function setWebUiUnexpectedExitHandler(
   handler: ((details: { code: number | null; signal: NodeJS.Signals | null }) => void) | null,
 ): void {
   unexpectedExitHandler = handler
+}
+
+export function setWebUiRestartRequestHandler(handler: (() => void) | null): void {
+  restartRequestHandler = handler
+}
+
+function isDesktopRestartRequest(message: unknown): boolean {
+  return Boolean(
+    message
+    && typeof message === 'object'
+    && (message as { type?: unknown }).type === DESKTOP_RESTART_REQUEST,
+  )
 }
 
 function posixDescendantPids(rootPid: number): number[] {
@@ -540,21 +550,12 @@ async function getFreeTcpPort(): Promise<number> {
   })
 }
 
-async function canBindTcpPort(port: number): Promise<boolean> {
-  return await new Promise((resolveCanBind) => {
-    const server = createServer()
-    server.unref()
-    server.once('error', () => resolveCanBind(false))
-    server.listen(port, '127.0.0.1', () => {
-      server.close(() => resolveCanBind(true))
-    })
-  })
-}
-
 async function getFreeTcpPortInRange(min: number, max: number): Promise<number> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const port = min + (randomBytes(2).readUInt16BE(0) % (max - min + 1))
-    if (await canBindTcpPort(port)) return port
+    // Bridge workers use tcp://127.0.0.1, so keep the probe on the same
+    // loopback address instead of reserving an IPv4 wildcard port.
+    if (await canBindTcpPort(port, '127.0.0.1')) return port
   }
   return getFreeTcpPort()
 }
@@ -727,6 +728,11 @@ export async function startWebUiServer(port = DEFAULT_PORT): Promise<string> {
     PATH: runtimePath,
   }, hermesSelection)
 
+  const released = await releaseOccupiedWebUiPort(port, token)
+  if (released) {
+    console.warn(`[webui] released an orphaned Desktop Web UI on port ${port}`)
+  }
+
   const fallbackWebUiDir = defaultWebuiDir()
   try {
     return await launchWebUiServer(primaryWebUiDir, primaryEntry, env, port)
@@ -746,7 +752,7 @@ async function launchWebUiServer(webUiDirectory: string, entry: string, env: Nod
   serverProc = spawn(process.execPath, [entry], {
     cwd: webUiDirectory,
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     windowsHide: true,
   })
 
@@ -772,13 +778,17 @@ async function launchWebUiServer(webUiDirectory: string, entry: string, env: Nod
     }
   })
   launchedProc.stderr?.on('error', () => { /* EPIPE: ignore */ })
+  launchedProc.on('message', message => {
+    if (serverProc !== launchedProc || !isDesktopRestartRequest(message)) return
+    if (!restartRequestHandler) {
+      console.warn('[desktop] Web UI requested an App restart before a handler was registered')
+      return
+    }
+    restartRequestHandler()
+  })
   launchedProc.on('exit', (code, signal) => {
     console.error(`[webui] server exited code=${code} signal=${signal}`)
     if (serverProc === launchedProc) serverProc = null
-    if (code === 75) {
-      runtimeRestartHandler?.()
-      return
-    }
     if (startupReady && code !== 0 && app.isReady()) {
       unexpectedExitHandler?.({ code, signal })
     }

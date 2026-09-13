@@ -1,4 +1,5 @@
 import type { Context } from 'koa'
+import { normalizeCloudAgentMachineId } from '../services/group-chat/cloud-agent-auth'
 import { listProfileNamesFromDisk } from '../public/profile-config'
 import { canManageGroupChatRoom } from '../services/group-chat/access'
 import {
@@ -282,6 +283,7 @@ export async function localAgents(ctx: Context): Promise<void> {
     protocolVersion: GROUP_AGENT_RELAY_PROTOCOL_VERSION,
     agents: listProfileNamesFromDisk().map(profile => ({
       agent: 'hermes',
+      agentMode: 'scoped',
       profile,
       provider: '',
       model: '',
@@ -310,12 +312,13 @@ export async function connectLocalAgent(ctx: Context): Promise<void> {
     const cloudOrigin = normalizeCloudOrigin(body.cloudOrigin)
     const targetOrigin = normalizeGroupAgentTargetOrigin(body.targetOrigin)
     const pairingTicket = String(body.pairingTicket || '').trim()
-    const agent = normalizeRemoteGroupAgentDescriptor(body.agent)
+    const agent = normalizeRemoteGroupAgentDescriptor(body.agent, 'connection request')
     assertAgentAvailable(agent.agent)
     if (!pairingTicket) throw new Error('pairingTicket is required')
     const manager = getGroupAgentOutboundRelayManager(() => server.getChatRunService())
     const connected = await manager.connect({
       cloudOrigin,
+      cloudMachineId: normalizeCloudAgentMachineId(body.cloudMachineId),
       targetOrigin,
       pairingTicket,
       agent,

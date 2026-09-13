@@ -19,8 +19,8 @@ const packageJson = JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf-
 const openapi = {
   openapi: '3.0.3',
   info: {
-    title: 'Hermes Studio API',
-    description: 'Hermes Studio API — chat sessions, scheduled jobs, platform channels, model management, skills, memory, logs, file browser, group chat, and terminal.',
+    title: 'Ekko Studio API',
+    description: 'Ekko Studio API — chat sessions, scheduled jobs, platform channels, model management, skills, memory, logs, file browser, group chat, and terminal.',
     version: packageJson.version,
   },
   servers: [
@@ -66,6 +66,7 @@ const tagMappings = {
   'modules/studio/routes/download.ts': { name: 'Studio Files', description: 'Studio file download' },
   'modules/hermes/routes/mcp.ts': { name: 'MCP', description: 'MCP server and tool management' },
   'modules/hermes/routes/runtime-versions.ts': { name: 'Runtime Versions', description: 'Runtime and Web UI version management' },
+  'modules/hermes/routes/legacy-data-migration.ts': { name: 'Data Migration', description: 'One-time legacy Hermes data migration' },
   'modules/hermes/routes/write-gate.ts': { name: 'Write Gate', description: 'Hermes Agent write approval review' },
   'modules/hermes/routes/journey.ts': { name: 'Journey', description: 'Hermes Agent learning journey graph' },
   'modules/ekko/routes/memory.ts': { name: 'Ekko Memory', description: 'Ekko durable memory management' },
@@ -95,6 +96,7 @@ const tagMappings = {
   'modules/studio/routes/mcu-devices.ts': { name: 'MCU Devices', description: 'Microcontroller device management' },
   'modules/studio/routes/mcu-firmware.ts': { name: 'MCU Firmware', description: 'Microcontroller firmware distribution' },
   'modules/studio/routes/theme.ts': { name: 'Theme', description: 'Per-user appearance settings and background image' },
+  'modules/studio/routes/announcements.ts': { name: 'Announcements', description: 'Published Studio desktop announcements, newest first' },
   'modules/studio/routes/api-docs.ts': { name: 'API Docs', description: 'OpenAPI route catalog' },
   'modules/studio/routes/agent-status.ts': { name: 'Agent Status', description: 'In-memory Agent installation, version, and source status' },
   'modules/coding-agents/routes/agents.ts': { name: 'Coding Agents', description: 'Coding agent installation, config, and runs' },
@@ -317,6 +319,36 @@ function addEndpoint(paths, method, path, controllerMethod, tagInfo, content, ma
   }
 
   const parameters = generateParameters(openapiPath, controllerSource)
+  if (openapiPath === '/api/studio/sessions' && method === 'get') {
+    operation.responses['200'] = {
+      description: 'Session list. Supplying offset also returns pagination metadata and the total matching the same visibility, category, and include/exclude filters before pagination.',
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object', required: ['sessions'],
+            properties: {
+              sessions: { type: 'array', items: { type: 'object', additionalProperties: true } },
+              total: { type: 'integer', minimum: 0, description: 'Total matching sessions, independent of offset and limit. Present when offset is supplied.' },
+              hasMore: { type: 'boolean' },
+              offset: { type: 'integer', minimum: 0 },
+              limit: { type: 'integer', minimum: 1 },
+            },
+          },
+        },
+      },
+    }
+    for (const parameter of parameters) {
+      if (parameter.name === 'category') {
+        parameter.schema = { oneOf: [{ type: 'integer', minimum: 1 }, { type: 'string', enum: ['none'] }] }
+        parameter.description = 'Filter by category ID; none selects uncategorized sessions.'
+      } else if (parameter.name === 'include' || parameter.name === 'exclude') {
+        parameter.schema = { type: 'array', items: { type: 'string' } }
+        parameter.style = 'form'
+        parameter.explode = true
+        parameter.description = 'Repeat this parameter for each session ID.'
+      }
+    }
+  }
   if (parameters.length) operation.parameters = parameters
 
   const requestBody = generateRequestBody(method, controllerSource)
@@ -882,7 +914,7 @@ openapi.paths['/api/studio/chat-run/runs'] = {
   post: {
     tags: ['Chat Run'],
     summary: 'Run chat and wait for completion',
-    description: 'Starts a Hermes Studio chat run through the chat-run transport and waits for a terminal result. Use this from HTTP/MCP callers that cannot consume Socket.IO streams.',
+    description: 'Starts a Ekko Studio chat run through the chat-run transport and waits for a terminal result. Use this from HTTP/MCP callers that cannot consume Socket.IO streams.',
     operationId: 'runChatOnce',
     security: [{ BearerAuth: [] }],
     requestBody: {
@@ -912,7 +944,7 @@ openapi.paths['/api/studio/chat-run/runs'] = {
               },
               profile: {
                 type: 'string',
-                description: 'Hermes Studio profile name. Defaults to the authenticated request profile or default.',
+                description: 'Ekko Studio profile name. Defaults to the authenticated request profile or default.',
               },
               provider: {
                 type: 'string',
@@ -959,12 +991,12 @@ openapi.paths['/api/studio/chat-run/runs'] = {
               },
               coding_agent_id: {
                 type: 'string',
-                enum: ['claude-code', 'codex'],
+                enum: ['claude-code', 'codex', 'pi', 'grok', 'opencode', 'ekko-agent'],
                 description: 'Coding agent id when source is coding_agent.',
               },
               agent_id: {
                 type: 'string',
-                enum: ['claude-code', 'codex'],
+                enum: ['claude-code', 'codex', 'pi', 'grok', 'opencode', 'ekko-agent'],
                 description: 'Alias for coding_agent_id.',
               },
               mode: {
@@ -1032,6 +1064,46 @@ openapi.paths['/api/studio/chat-run/runs'] = {
   },
 }
 
+openapi.paths['/api/studio/mobile-calendar/request'] = {
+  post: {
+    tags: ['Chat Run'],
+    summary: 'Request one-time mobile calendar or reminder access',
+    description: 'Requests a user-confirmed calendar/reminder operation from the App for the exact authenticated direct-chat session. Single-item delete requires exact id, title and occurrence time with fresh App confirmation. Background, workflow, group-chat, and delegated use are not supported.',
+    operationId: 'requestMobileCalendar',
+    security: [{ BearerAuth: [] }],
+    requestBody: {
+      required: true,
+      content: {
+        'application/json': {
+          schema: {
+            type: 'object',
+            required: ['session_id', 'capability', 'action', 'purpose'],
+            properties: {
+              session_id: { type: 'string' },
+              capability: { type: 'string', enum: ['calendar', 'reminder'] },
+              action: { type: 'string', enum: ['list', 'create', 'update', 'complete', 'delete'] },
+              purpose: { type: 'string', maxLength: 240 },
+              start_ms: { type: 'number' },
+              end_ms: { type: 'number' },
+              include_completed: { type: 'boolean' },
+              limit: { type: 'integer', minimum: 1, maximum: 100 },
+              item: { type: 'object', additionalProperties: true },
+              timeout_ms: { type: 'integer', minimum: 3000, maximum: 300000, default: 300000 },
+            },
+          },
+        },
+      },
+    },
+    responses: {
+      '200': { description: 'Confirmed App result, denial, or sanitized device error' },
+      '400': { $ref: '#/components/responses/BadRequest' },
+      '401': { $ref: '#/components/responses/Unauthorized' },
+      '404': { $ref: '#/components/responses/NotFound' },
+      '503': { description: 'Chat run service unavailable' },
+    },
+  },
+}
+
 // Add WebSocket terminal endpoint
 openapi.paths['/api/hermes/terminal'] = {
   'get': {
@@ -1050,6 +1122,71 @@ openapi.paths['/api/hermes/terminal'] = {
 if (!openapi.tags.find(t => t.name === 'Terminal')) {
   openapi.tags.push({ name: 'Terminal', description: 'WebSocket terminal access' })
 }
+
+// DSH Web profile plugins and native schema-based settings.
+const pluginResponse = schema => ({ description: 'Plugin state', content: { 'application/json': { schema } } })
+const pluginError = description => ({ description, content: { 'application/json': { schema: {
+  type: 'object', properties: { code: { type: 'string' }, error: { type: 'string' }, retryable: { type: 'boolean' } },
+} } } })
+const pluginAuth = { security: [{ BearerAuth: [] }], tags: ['Coding Agents'] }
+openapi.paths['/api/coding-agents/dsh/plugin-inventory'] = { get: {
+  ...pluginAuth, operationId: 'getNativeDshPluginInventory', summary: 'Discover native DSH preset plugin entries',
+  description: 'Super admin only. Reads the installed CLI dependency graph and native shipped/user preset compositions, recursively flattening groups. Includes disabled entries. Does not execute YAML expressions or connect to the Web runtime. Custom deployment roots and overlays are not resolved. Counts are per preset, not npm package counts. Includes separately counted packages installed in the native Web profile. Runtime phases remain unknown for this static inventory.',
+  responses: { '200': pluginResponse({ type: 'object', properties: {
+    source: { type: 'string', enum: ['native-presets'] }, discovery: { type: 'string', enum: ['shipped-and-user-roots'] },
+    sourceHome: { type: 'string' }, packageVersion: { type: 'string' }, defaultPreset: { type: 'string' }, runtimeConnected: { type: 'boolean', enum: [false] },
+    web: { type: 'object', properties: { profile: { type: 'string', enum: ['web'] }, sourcePath: { type: 'string' }, revision: { type: 'string' }, packages: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, requested: { type: 'string' }, version: { type: 'string' }, bundle: { type: 'boolean' }, containsBrowserPart: { type: 'boolean' }, sourcePath: { type: 'string' }, error: { type: 'string' } } } } } },
+    presets: { type: 'array', items: { type: 'object', properties: {
+      id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, trust: { type: 'string', enum: ['system', 'user'] },
+      sourcePath: { type: 'string' }, isDefault: { type: 'boolean' }, error: { type: 'string' },
+      entries: { type: 'array', items: { type: 'object', properties: {
+        entryId: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, moduleName: { type: 'string' }, configuredEnabled: { oneOf: [{ type: 'boolean' }, { type: 'string', enum: ['conditional'] }] },
+        runtimePhase: { nullable: true, enum: [null] }, groupPath: { type: 'array', items: { type: 'string' } },
+      } } },
+    } } },
+  } }), '401': pluginError('Authentication required'), '403': pluginError('Super admin required'), '422': pluginError('Native inventory unavailable in this installation'), '500': pluginError('Source unavailable') },
+} }
+const packageResponses = { '200': pluginResponse({ type: 'object', additionalProperties: true }), '400': pluginError('Invalid package selection'), '403': pluginError('Super admin required'), '409': pluginError('Another package operation is running'), '412': pluginError('Web profile changed; reload before continuing'), '422': pluginError('Native package command failed'), '503': pluginError('DSH or package manager unavailable') }
+openapi.paths['/api/coding-agents/dsh/web-plugins'] = { post: {
+  ...pluginAuth, operationId: 'changeDshWebPlugins', summary: 'Install or remove packages in the native Web profile',
+  parameters: [{ in: 'header', name: 'If-Match', required: true, schema: { type: 'string' }, description: 'Quoted Web manifest revision from plugin-inventory' }],
+  requestBody: { required: true, content: { 'application/json': { schema: { oneOf: [
+    { type: 'object', required: ['action', 'packageSpec'], properties: { action: { type: 'string', enum: ['install'] }, packageSpec: { type: 'string', description: 'package@exact-version or github:owner/repo#commit' } } },
+    { type: 'object', required: ['action', 'packageName'], properties: { action: { type: 'string', enum: ['remove'] }, packageName: { type: 'string' } } },
+  ] } } } }, responses: packageResponses,
+} }
+openapi.paths['/api/coding-agents/dsh/ui-session'] = { post: {
+  ...pluginAuth, operationId: 'openDshPluginUi', summary: 'Open an authenticated native DSH configuration slot',
+  description: 'Super admin only. Starts the native Web runtime and returns a short-lived scoped frame path. Plugin forms and business APIs are owned by DSH and installed plugins.',
+  responses: { '200': pluginResponse({ type: 'object', properties: { id: { type: 'string' }, path: { type: 'string' } } }), '403': pluginError('Super admin required'), '503': pluginError('Native DSH Web runtime unavailable') },
+} }
+openapi.paths['/api/coding-agents/dsh/ui-session/{id}'] = { delete: {
+  ...pluginAuth, operationId: 'closeDshPluginUi', summary: 'Revoke a native plugin frame session',
+  parameters: [{ in: 'path', name: 'id', required: true, schema: { type: 'string' } }], responses: { '204': { description: 'Frame session revoked' }, '403': pluginError('Super admin required') },
+} }
+
+// Studio-owned Agent preset presentation over the existing native DSH host.
+const presetRowSchema = { type: 'object', required: ['id', 'trust', 'isDefault'], properties: {
+  id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, trust: { type: 'string', enum: ['system', 'user'] }, isDefault: { type: 'boolean' }, broken: { type: 'string' },
+} }
+const presetRosterSchema = { type: 'object', required: ['presets', 'authorable'], properties: { presets: { type: 'array', items: presetRowSchema }, authorable: { type: 'boolean' } } }
+const presetErrors = { '400': pluginError('Invalid preset request'), '403': pluginError('Super admin required or shipped preset is read-only'), '404': pluginError('Preset not found'), '422': pluginError('Unavailable preset or invalid operation'), '502': pluginError('Native preset service unavailable'), '503': pluginError('DSH installation unavailable') }
+const presetParameters = [{ in: 'path', name: 'presetId', required: true, schema: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$', maxLength: 200 } }]
+openapi.paths['/api/coding-agents/dsh/session-presets'] = { get: {
+  ...pluginAuth, operationId: 'listDshSessionPresets', summary: 'List DSH modes available when creating a chat',
+  description: 'Available to authenticated chat users. Returns only preset identifiers, names, descriptions, default and availability; does not expose configuration files or authoring operations.',
+  responses: { '200': pluginResponse({ type: 'object', required: ['presets'], properties: { presets: { type: 'array', items: { type: 'object', required: ['id', 'isDefault'], properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, isDefault: { type: 'boolean' }, unavailable: { type: 'boolean' } } } } } }), '502': pluginError('Native preset service unavailable'), '503': pluginError('DSH installation unavailable') },
+} }
+openapi.paths['/api/coding-agents/dsh/agent-presets'] = {
+  get: { ...pluginAuth, operationId: 'listDshAgentPresets', summary: 'List the live native Agent preset roster', description: 'Reuses the existing owned DSH management host, including configured preset roots. Returns names, descriptions, default, authoring availability and broken states.', responses: { '200': pluginResponse(presetRosterSchema), ...presetErrors } },
+  post: { ...pluginAuth, operationId: 'copyDshAgentPreset', summary: 'Duplicate a native Agent preset into its writable source root', requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['from', 'id'], properties: { from: { type: 'string' }, id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]*$', maxLength: 200 }, name: { type: 'string', maxLength: 200 } } } } } }, responses: { '200': pluginResponse(presetRosterSchema), ...presetErrors } },
+}
+openapi.paths['/api/coding-agents/dsh/agent-presets/{presetId}'] = {
+  get: { ...pluginAuth, operationId: 'readDshAgentPreset', summary: 'Read a native preset composition', parameters: presetParameters, responses: { '200': pluginResponse({ type: 'object', properties: { agentPreset: { type: 'string' }, content: { type: 'string' }, name: { type: 'string' }, trust: { type: 'string', enum: ['system', 'user'] } } }), ...presetErrors } },
+  delete: { ...pluginAuth, operationId: 'deleteDshAgentPreset', summary: 'Delete a custom preset directory through DSH', description: 'Native DSH rejects shipped presets and clears a deleted user default. Existing sessions retain their mounted composition.', parameters: presetParameters, responses: { '200': pluginResponse(presetRosterSchema), ...presetErrors } },
+}
+openapi.paths['/api/coding-agents/dsh/agent-presets/{presetId}/default'] = { put: { ...pluginAuth, operationId: 'defaultDshAgentPreset', summary: 'Set the native preset default for new sessions', parameters: presetParameters, responses: { '200': pluginResponse(presetRosterSchema), ...presetErrors } } }
+openapi.paths['/api/coding-agents/dsh/agent-presets/{presetId}/location'] = { post: { ...pluginAuth, operationId: 'locateDshAgentPreset', summary: 'Open a custom preset directory on the DSH host or return its path', parameters: presetParameters, responses: { '200': pluginResponse({ oneOf: [{ type: 'object', required: ['opened'], properties: { opened: { type: 'boolean', enum: [true] } } }, { type: 'object', required: ['opened', 'path'], properties: { opened: { type: 'boolean', enum: [false] }, path: { type: 'string' } } }] }), ...presetErrors } } }
 
 // Write output
 const outputPath = join(rootDir, 'docs/openapi.json')

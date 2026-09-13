@@ -188,6 +188,7 @@ describe('group chat agent workspace bridge runs', () => {
   it.each([
     ['codex', 'codex'],
     ['claude', 'claude-code'],
+    ['dsh', 'dsh'],
     ['ekko', 'ekko-agent'],
   ] as const)('keeps %s tool output mention text non-routable', async (agent, codingAgentId) => {
     const { AgentClients } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-clients')
@@ -209,6 +210,7 @@ describe('group chat agent workspace bridge runs', () => {
     const client = await clients.createAgent({
       agentId: `agent-${agent}`,
       agent,
+      agentPreset: agent === 'dsh' ? 'minimal' : undefined,
       profile: 'default',
       name: agent,
       description: '',
@@ -231,7 +233,7 @@ describe('group chat agent workspace bridge runs', () => {
     })
 
     expect(runAndWait).toHaveBeenCalledWith(
-      expect.objectContaining({ coding_agent_id: codingAgentId }),
+      expect.objectContaining({ coding_agent_id: codingAgentId, ...(agent === 'dsh' ? { agent_preset: 'minimal' } : {}) }),
       expect.anything(),
     )
     expect(mockSocket.emit).toHaveBeenCalledWith(
@@ -732,6 +734,7 @@ describe('group chat agent workspace bridge runs', () => {
   it.each([
     ['ekko', 'ekko-agent'],
     ['claude', 'claude-code'],
+    ['dsh', 'dsh'],
     ['pi', 'pi'],
   ] as const)('passes the dynamic group system prompt to the %s runtime', async (agent, codingAgentId) => {
     const { AgentClients } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-clients')
@@ -826,6 +829,55 @@ describe('group chat agent workspace bridge runs', () => {
     expect(mockSocket.emit).toHaveBeenCalledWith('clarify.resolved', expect.objectContaining({
       roomId: 'room-runtime', clarify_id: `clarify-${agent}`, resolved: true,
     }))
+  })
+
+  it('runs a global Codex group Agent without scoped provider, model, protocol, or reasoning overrides', async () => {
+    const { AgentClients } = await import('../../packages/server/src/modules/studio/services/group-chat/agent-clients')
+    const runAndWait = vi.fn(async () => ({ ok: true, output: 'done' }))
+    const clients = new AgentClients()
+    clients.setChatRunService({ runAndWait, abortSession: vi.fn(async () => {}) })
+    const client = await clients.createAgent({
+      agentId: 'agent-global-codex',
+      agent: 'codex',
+      agentMode: 'global',
+      profile: 'default',
+      provider: 'must-not-leak',
+      model: 'must-not-leak',
+      apiMode: 'chat_completions',
+      reasoningEffort: 'high',
+      name: 'Global Codex',
+      description: 'Uses the user CLI configuration',
+      invited: 0,
+    } as any) as any
+    client.setStorage({
+      getRoom: vi.fn(() => ({ name: 'Global Room', workspace: '' })),
+      getRoomMembers: vi.fn(() => []),
+      getRoomAgents: vi.fn(() => []),
+    })
+
+    await client.replyToMention('room-global', {
+      messageId: 'msg-global',
+      content: '@Global Codex work',
+      senderName: 'Human',
+      senderId: 'human-1',
+      timestamp: 1,
+      role: 'user',
+    })
+
+    const runInput = runAndWait.mock.calls[0][0]
+    expect(runInput).toMatchObject({
+      coding_agent_id: 'codex',
+      mode: 'global',
+      profile: 'default',
+      group_room_id: 'room-global',
+      group_agent_id: 'agent-global-codex',
+    })
+    expect(runInput.instructions).toContain('You are "Global Codex", an AI assistant in the group chat room "Global Room"')
+    expect(runInput.group_system_prompt).toBe(runInput.instructions)
+    expect(runInput).not.toHaveProperty('provider')
+    expect(runInput).not.toHaveProperty('model')
+    expect(runInput).not.toHaveProperty('apiMode')
+    expect(runInput).not.toHaveProperty('reasoning_effort')
   })
 
   it('keeps Pi group turns temporary while reinjecting the room history', async () => {

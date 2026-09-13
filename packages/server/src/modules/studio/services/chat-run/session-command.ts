@@ -169,7 +169,7 @@ export async function handleSessionCommand(
         ok: false,
         action,
         terminal: !state.isWorking,
-        message: 'Use /bundles create in Hermes Studio to open the bundle creator.',
+        message: 'Use /bundles create in Ekko Studio to open the bundle creator.',
       })
       return
     }
@@ -1215,6 +1215,7 @@ function createBranchSession(parentSessionId: string, requestedTitle: string, ct
     agent_mode: parent.agent_mode || '',
     agent_session_id: parent.agent_session_id || '',
     agent_native_session_id: parent.agent_native_session_id || '',
+    agent_preset: parent.agent_preset || '',
     model: parent.model || ctx.model || '',
     provider: parent.provider || ctx.provider || '',
     api_mode: parent.api_mode || '',
@@ -1264,7 +1265,7 @@ function createBranchSession(parentSessionId: string, requestedTitle: string, ct
 
 
 function isCodingAgentBranchSource(session: { source?: string | null; agent?: string | null } | null | undefined): boolean {
-  return session?.source === 'coding_agent' || session?.agent === 'claude' || session?.agent === 'codex' || session?.agent === 'pi' || session?.agent === 'ekko-agent'
+  return session?.source === 'coding_agent' || session?.agent === 'claude' || session?.agent === 'codex' || session?.agent === 'pi' || session?.agent === 'grok' || (session?.agent === 'opencode' || session?.agent === 'dsh') || session?.agent === 'ekko-agent'
 }
 
 function generateBranchSessionId(): string {

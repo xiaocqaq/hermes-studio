@@ -1,3 +1,7 @@
+import { getSessionTaskPlans } from '../services/task-plans'
+import { bindLegacyAppEvents } from '../services/webhooks/legacy-app-events'
+import { bindAppEventSubscription } from '../services/webhooks/app-events'
+import { mobileDeviceRoom, mobileDeviceId, sameMobileDevice, mobileEventAllowed, type MobileDeviceTarget } from '../services/chat-run/mobile-device-target'
 /**
  * ChatRunSocket — Socket.IO namespace /chat-run.
  *
@@ -50,11 +54,25 @@ import type {
   QueuedRun,
   SessionState,
 } from '../services/chat-run/types'
-import { authenticateUserToken, isAuthEnabled, type AuthenticatedUser } from '../public/auth'
+import { authenticateUserToken, inspectAppUserToken, isAuthEnabled, type AuthenticatedUser } from '../public/auth'
 import { userCanAccessProfile } from '../repositories/users-store'
 import { observeRunChatPetEvent } from '../public/pet-events'
 import { observeChatRunWebhookEvent, type ChatRunWebhookAgent } from '../services/webhooks'
 import { getAgentStatusSnapshot } from '../public/agent-status-registry'
+import {
+  normalizeMobileCalendarRequest,
+  normalizeMobileCalendarResponse,
+  type MobileCalendarCapability,
+  type MobileCalendarResponse,
+  type MobileCalendarRequest,
+} from '../services/chat-run/mobile-calendar'
+import {
+  mobileHealthResponseSourceMatches,
+  normalizeMobileHealthRequest,
+  normalizeMobileHealthResponse,
+  type MobileHealthResponse,
+  type MobileHealthRequest,
+} from '../services/chat-run/mobile-health'
 
 type AgentBridgeBackgroundNotification = any
 type AgentBridgeBackgroundSession = any
@@ -151,17 +169,44 @@ function isHermesWorkerBackedSession(session?: { source?: string | null; agent?:
   if (!source || source === 'cli' || source === 'api_server') return true
   if (source === 'workflow' || source === 'group_chat') {
     const agent = String(session?.agent || '').trim()
-    return agent !== 'claude' && agent !== 'codex' && agent !== 'pi' && agent !== 'ekko-agent' && !session?.agent_session_id
+    return agent !== 'claude' && agent !== 'codex' && agent !== 'pi' && agent !== 'grok' && (agent !== 'opencode' && agent !== 'dsh') && agent !== 'ekko-agent' && !session?.agent_session_id
   }
   if (source !== 'global_agent') return false
   const agent = String(session?.agent || '').trim()
-  return agent !== 'claude' && agent !== 'codex' && agent !== 'pi' && agent !== 'ekko-agent' && !session?.agent_session_id
+  return agent !== 'claude' && agent !== 'codex' && agent !== 'pi' && agent !== 'grok' && (agent !== 'opencode' && agent !== 'dsh') && agent !== 'ekko-agent' && !session?.agent_session_id
 }
 
 function isBridgeRunSource(source?: string): boolean {
   return source === 'cli' || source === 'global_agent' || source === 'workflow' || source === 'group_chat'
 }
 
+function mobileLocationRunInstruction(sessionId: string | undefined, source: string | undefined): string {
+  if (!sessionId || source === 'workflow' || source === 'group_chat') return ''
+  return [
+    `The current Ekko Studio chat session id is ${JSON.stringify(sessionId)}.`,
+    'Only when the user explicitly asks to use their current mobile-device location, use ekko_studio_use_toolset to describe and call ekko_studio_use_mobile_location with this exact session_id.',
+    'The App will show a one-time confirmation before sharing WGS84 coordinates. Never request location proactively, in a delegated subtask, in a workflow node, or for background tracking.',
+  ].join(' ')
+}
+
+function mobileCalendarRunInstruction(sessionId: string | undefined, source: string | undefined): string {
+  if (!sessionId || source === 'workflow' || source === 'group_chat') return ''
+  return [
+    `The current Ekko Studio direct-chat session id is ${JSON.stringify(sessionId)}.`,
+    'Only when the user explicitly asks to read or change calendar events, use ekko_studio_use_toolset to describe and call ekko_studio_use_mobile_calendar with this exact session_id.',
+    'Only when the user explicitly asks to read or change reminders, use ekko_studio_use_toolset to describe and call ekko_studio_use_mobile_reminders with this exact session_id.',
+    'The App always asks the user to share once or confirm the write. Never use these tools proactively, in delegated/workflow/group tasks, or for background access. Delete only the exact listed item after fresh App confirmation; never delete a whole recurring series.',
+  ].join(' ')
+}
+
+function mobileHealthRunInstruction(sessionId: string | undefined, source: string | undefined): string {
+  if (!sessionId || source === 'workflow' || source === 'group_chat') return ''
+  return [
+    `The current Ekko Studio direct-chat session id is ${JSON.stringify(sessionId)}.`,
+    'Only when the user explicitly asks to read Apple Health data from their iPhone or iPad, use ekko_studio_use_toolset to describe and call ekko_studio_use_mobile_health with this exact session_id.',
+    'Health data access is available only on iOS through Apple HealthKit. The App asks the user to share once and requests system permission. This tool is read-only and limited to its allowlisted activity, sleep, heart, oxygen and body metrics for at most 31 days. Never use it proactively, for diagnosis, advertising, background collection, delegated tasks, workflows, or group chats.',
+  ].join(' ')
+}
 type ChatRunBridgeReadiness =
   | { ok: true }
   | { ok: false; error: string; runtimeUnavailable?: true }
@@ -220,6 +265,9 @@ function webhookAgentForRun(data?: { coding_agent_id?: string; agent_id?: string
   if (agent === 'ekko-agent') return 'ekko'
   if (agent === 'codex') return 'codex'
   if (agent === 'pi') return 'pi'
+  if (agent === 'grok') return 'grok'
+  if (agent === 'dsh') return 'dsh'
+  if (agent === 'opencode') return 'opencode'
   if (agent === 'claude-code') return 'claude-code'
   return 'bridge'
 }
@@ -236,6 +284,115 @@ export interface ChatRunAndWaitResult {
 
 type ChatRunAutoApprovalChoice = 'once' | 'session' | 'always'
 
+type MobileLocationAccuracy = 'coarse' | 'precise'
+
+type MobileLocationValue = {
+  latitude: number
+  longitude: number
+  accuracyMeters: number
+  altitudeMeters?: number
+  speedMetersPerSecond?: number
+  coordinateSystem: 'wgs84'
+  timestamp: number
+}
+
+export type MobileLocationResponse =
+  | { status: 'success'; location: MobileLocationValue }
+  | { status: 'denied' }
+  | { status: 'error'; error: { code: string } }
+
+type PendingMobileLocationRequest = {
+  sessionId: string
+  profile: string
+  resolve: (response: MobileLocationResponse) => void
+  timer: NodeJS.Timeout
+}
+
+const MOBILE_LOCATION_MIN_TIMEOUT_MS = 3_000
+const MOBILE_LOCATION_MAX_TIMEOUT_MS = 60_000
+const MOBILE_LOCATION_DEVICE_TIMEOUT_MS = 30_000
+const MOBILE_LOCATION_PURPOSE_MAX_LENGTH = 240
+const MOBILE_LOCATION_ERROR_CODES = new Set([
+  'location_permission_denied',
+  'location_timeout',
+  'location_service_unavailable',
+  'location_invalid_result',
+  'location_failed',
+])
+
+function boundedMobileLocationTimeout(value: unknown): number {
+  const numeric = Math.round(Number(value))
+  if (!Number.isFinite(numeric)) return 35_000
+  return Math.max(MOBILE_LOCATION_MIN_TIMEOUT_MS, Math.min(MOBILE_LOCATION_MAX_TIMEOUT_MS, numeric))
+}
+
+function finiteLocationNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeMobileLocationResponse(value: unknown): MobileLocationResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const response = value as Record<string, any>
+  const status = String(response.status || '').trim()
+  if (status === 'denied') return { status: 'denied' }
+  if (status === 'error') {
+    const rawCode = String(response.error?.code || '').trim()
+    return {
+      status: 'error',
+      error: { code: MOBILE_LOCATION_ERROR_CODES.has(rawCode) ? rawCode : 'location_failed' },
+    }
+  }
+  if (status !== 'success' || !response.location || typeof response.location !== 'object') return null
+  // The App must supply WGS84 coordinates; relabeling another system does not convert it.
+  if (Array.isArray(response.location) || response.location.coordinateSystem !== 'wgs84') return null
+  const latitude = finiteLocationNumber(response.location.latitude)
+  const longitude = finiteLocationNumber(response.location.longitude)
+  if (
+    latitude == null
+    || longitude == null
+    || latitude < -90
+    || latitude > 90
+    || longitude < -180
+    || longitude > 180
+  ) return null
+  const location: MobileLocationValue = {
+    latitude,
+    longitude,
+    accuracyMeters: Math.max(0, finiteLocationNumber(response.location.accuracyMeters) || 0),
+    coordinateSystem: 'wgs84',
+    timestamp: Math.max(0, Math.round(finiteLocationNumber(response.location.timestamp) || Date.now())),
+  }
+  const altitude = finiteLocationNumber(response.location.altitudeMeters)
+  const speed = finiteLocationNumber(response.location.speedMetersPerSecond)
+  if (altitude != null) location.altitudeMeters = altitude
+  if (speed != null && speed >= 0) location.speedMetersPerSecond = speed
+  return { status: 'success', location }
+}
+
+type PendingMobileCalendarRequest = {
+  target: MobileDeviceTarget
+  sessionId: string
+  profile: string
+  request: MobileCalendarRequest
+  resolve: (response: MobileCalendarResponse) => void
+  timer: NodeJS.Timeout
+}
+type PendingMobileHealthRequest = {
+  target: MobileDeviceTarget
+  sessionId: string
+  profile: string
+  request: MobileHealthRequest
+  resolve: (response: MobileHealthResponse) => void
+  timer: NodeJS.Timeout
+}
+const MOBILE_CALENDAR_MIN_TIMEOUT_MS = 3_000
+const MOBILE_CALENDAR_MAX_TIMEOUT_MS = 300_000
+const MOBILE_CALENDAR_DEFAULT_TIMEOUT_MS = 300_000
+function boundedMobileCalendarTimeout(value: unknown): number {
+  const numeric = Math.round(Number(value))
+  if (value == null || !Number.isFinite(numeric) || numeric <= 0) return MOBILE_CALENDAR_DEFAULT_TIMEOUT_MS
+  return Math.max(MOBILE_CALENDAR_MIN_TIMEOUT_MS, Math.min(MOBILE_CALENDAR_MAX_TIMEOUT_MS, numeric))
+}
 export class ChatRunSocket {
   private nsp: ReturnType<Server['of']>
   private bridge = createPrimaryAgentBridge()
@@ -244,6 +401,10 @@ export class ChatRunSocket {
   private sessionMap = new Map<string, SessionState>()
   private bridgeResumePolls = new Set<string>()
   private readonly runWaiters = new Map<string, Set<(event: string, payload: any) => void>>()
+  private readonly pendingMobileLocations = new Map<string, PendingMobileLocationRequest>()
+  private readonly mobileRunTargets = new Map<string, MobileDeviceTarget>()
+  private readonly pendingMobileCalendar = new Map<string, PendingMobileCalendarRequest>()
+  private readonly pendingMobileHealth = new Map<string, PendingMobileHealthRequest>()
   private backgroundPollTimer?: NodeJS.Timeout
   private backgroundPollInFlight = false
   private backgroundRecoveryNeeded = true
@@ -270,6 +431,174 @@ export class ChatRunSocket {
     })
   }
 
+  requestMobileLocation(options: {
+    sessionId: string
+    profile: string
+    purpose?: string
+    accuracy?: MobileLocationAccuracy
+    timeoutMs?: number
+  }): Promise<MobileLocationResponse> {
+    const sessionId = String(options.sessionId || '').trim()
+    const profile = String(options.profile || '').trim() || 'default'
+    const session = getSession(sessionId)
+    if (!session) throw new Error('Session not found')
+    if ((String(session.profile || '').trim() || 'default') !== profile) {
+      throw new Error('Session is not available for this profile')
+    }
+    if (session.source === 'group_chat' || session.source === 'workflow') {
+      throw new Error('Mobile location is available only in direct chats')
+    }
+    for (const pending of this.pendingMobileLocations.values()) {
+      if (pending.sessionId === sessionId) throw new Error('A mobile location request is already pending')
+    }
+
+    const locationRequestId = randomUUID()
+    const timeoutMs = boundedMobileLocationTimeout(options.timeoutMs)
+    const purpose = String(options.purpose || '').trim().slice(0, MOBILE_LOCATION_PURPOSE_MAX_LENGTH)
+    const accuracy: MobileLocationAccuracy = options.accuracy === 'precise' ? 'precise' : 'coarse'
+
+    return new Promise<MobileLocationResponse>((resolve) => {
+      const timer = setTimeout(() => {
+        this.finishMobileLocationRequest(locationRequestId, {
+          status: 'error',
+          error: { code: 'location_timeout' },
+        })
+      }, timeoutMs)
+      timer.unref?.()
+      this.pendingMobileLocations.set(locationRequestId, {
+        sessionId,
+        profile,
+        resolve,
+        timer,
+      })
+      this.emitMobileLocationEvent(profile, sessionId, 'location.requested', {
+        event: 'location.requested',
+        location_request_id: locationRequestId,
+        purpose,
+        accuracy,
+        timeout_ms: Math.min(timeoutMs, MOBILE_LOCATION_DEVICE_TIMEOUT_MS),
+        max_age_ms: 0,
+      })
+    })
+  }
+
+  requestMobileCalendar(options: {
+    sessionId: string
+    profile: string
+    capability: MobileCalendarCapability
+    action?: unknown
+    purpose?: unknown
+    startMs?: unknown
+    endMs?: unknown
+    includeCompleted?: unknown
+    limit?: unknown
+    item?: unknown
+    timeoutMs?: unknown
+  }): Promise<MobileCalendarResponse> {
+    const sessionId = String(options.sessionId || '').trim()
+    const profile = String(options.profile || '').trim() || 'default'
+    const session = getSession(sessionId)
+    if (!session) throw new Error('Session not found')
+    if ((String(session.profile || '').trim() || 'default') !== profile) {
+      throw new Error('Session is not available for this profile')
+    }
+    if (session.source === 'group_chat' || session.source === 'workflow') {
+      throw new Error('Mobile calendar and reminders are available only in direct chats')
+    }
+    for (const pending of this.pendingMobileCalendar.values()) {
+      if (pending.sessionId === sessionId) throw new Error('A mobile calendar or reminder request is already pending')
+    }
+    const target = this.mobileRunTargets.get(sessionId)
+    if (!target || target.profile !== profile) throw new Error('Mobile target unavailable; send a new message from the intended mobile device')
+    const room = this.nsp.adapter.rooms.get(mobileDeviceRoom(target))
+    if (!room?.size) throw new Error('Target mobile device is offline; reconnect the same device')
+    const request = normalizeMobileCalendarRequest({
+      capability: options.capability,
+      action: options.action,
+      purpose: options.purpose,
+      start_ms: options.startMs,
+      end_ms: options.endMs,
+      include_completed: options.includeCompleted,
+      limit: options.limit,
+      item: options.item,
+    })
+    const requestId = randomUUID()
+    const timeoutMs = boundedMobileCalendarTimeout(options.timeoutMs)
+    const event = request.capability === 'reminder' ? 'reminder.requested' : 'calendar.requested'
+    const idKey = request.capability === 'reminder' ? 'reminder_request_id' : 'calendar_request_id'
+    return new Promise<MobileCalendarResponse>((resolve) => {
+      const timer = setTimeout(() => {
+        this.finishMobileCalendarRequest(requestId, {
+          status: 'error',
+          error: { code: 'calendar_failed' },
+        })
+      }, timeoutMs)
+      timer.unref?.()
+      this.pendingMobileCalendar.set(requestId, { sessionId, profile, target, request, resolve, timer })
+      this.emitMobileCalendarEvent(profile, sessionId, event, {
+        event,
+        [idKey]: requestId,
+        ...request,
+        target_device_id: target.deviceCode,
+        target_user_id: target.userId,
+        target_profile: target.profile,
+        timeout_ms: timeoutMs,
+        expires_at_ms: Date.now() + timeoutMs,
+      })
+    })
+  }
+
+  requestMobileHealth(options: {
+    sessionId: string
+    profile: string
+    purpose?: unknown
+    metrics?: unknown
+    startMs?: unknown
+    endMs?: unknown
+    limit?: unknown
+    timeoutMs?: unknown
+  }): Promise<MobileHealthResponse> {
+    const sessionId = String(options.sessionId || '').trim()
+    const profile = String(options.profile || '').trim() || 'default'
+    const session = getSession(sessionId)
+    if (!session) throw new Error('Session not found')
+    if ((String(session.profile || '').trim() || 'default') !== profile) throw new Error('Session is not available for this profile')
+    if (session.source === 'group_chat' || session.source === 'workflow') throw new Error('Mobile health data is available only in direct chats')
+    for (const pending of this.pendingMobileHealth.values()) {
+      if (pending.sessionId === sessionId) throw new Error('A mobile health request is already pending')
+    }
+    const target = this.mobileRunTargets.get(sessionId)
+    if (!target || target.profile !== profile) throw new Error('Mobile target unavailable; send a new message from the intended mobile device')
+    if (target.platform !== 'ios') throw new Error('Mobile health data is available only on iPhone and iPad')
+    if (!this.nsp.adapter.rooms.get(mobileDeviceRoom(target))?.size) throw new Error('Target mobile device is offline; reconnect the same device')
+    const request = normalizeMobileHealthRequest({
+      purpose: options.purpose,
+      metrics: options.metrics,
+      start_ms: options.startMs,
+      end_ms: options.endMs,
+      limit: options.limit,
+    })
+    const requestId = randomUUID()
+    const timeoutMs = boundedMobileCalendarTimeout(options.timeoutMs)
+    return new Promise<MobileHealthResponse>((resolve) => {
+      const timer = setTimeout(() => this.finishMobileHealthRequest(requestId, {
+        status: 'error',
+        error: { code: 'health_timeout' },
+      }), timeoutMs)
+      timer.unref?.()
+      this.pendingMobileHealth.set(requestId, { sessionId, profile, target, request, resolve, timer })
+      this.emitMobileHealthEvent(sessionId, 'health.requested', {
+        event: 'health.requested',
+        health_request_id: requestId,
+        ...request,
+        target_device_id: target.deviceCode,
+        target_user_id: target.userId,
+        target_profile: target.profile,
+        timeout_ms: timeoutMs,
+        expires_at_ms: Date.now() + timeoutMs,
+      })
+    })
+  }
   init() {
     this.closing = false
     this.nsp.use(this.authMiddleware.bind(this))
@@ -284,6 +613,20 @@ export class ChatRunSocket {
 
   private async authMiddleware(socket: Socket, next: (err?: Error) => void) {
     const token = socket.handshake.auth?.token as string | undefined
+    const appToken = token ? await inspectAppUserToken(token) : null
+    if (appToken) {
+      if (appToken.status !== 'active' || !appToken.user) return next(new Error('App device authentication failed'))
+      const profile = String(socket.handshake.query?.profile || 'default')
+      if (!this.canAccessProfile(appToken.user, profile)) return next(new Error('Profile access denied'))
+      const rawPlatform = String(socket.handshake.query?.platform || '').trim().toLowerCase()
+      const platform = rawPlatform === 'ios' || rawPlatform === 'android' ? rawPlatform : 'unknown'
+      socket.data.mobileDeviceTarget = {
+        deviceCode: appToken.deviceCode,
+        userId: String(appToken.user.id),
+        profile,
+        platform,
+      }
+    }
     if (!await isAuthEnabled()) {
       next()
       return
@@ -293,7 +636,7 @@ export class ChatRunSocket {
     if (!user) {
       return next(new Error('Authentication failed'))
     }
-    const socketProfile = String(socket.handshake.query?.profile || '').trim()
+    const socketProfile = String(socket.handshake.query?.profile || 'default').trim() || 'default'
     if (socketProfile && !this.canAccessProfile(user, socketProfile)) {
       return next(new Error('Profile access denied'))
     }
@@ -304,9 +647,17 @@ export class ChatRunSocket {
   // --- Connection handler ---
 
   private onConnection(socket: Socket) {
+    bindAppEventSubscription(socket)
+    bindLegacyAppEvents(socket, 'chat', event => {
+      const user = socket.data.user as AuthenticatedUser | undefined
+      return Boolean(user && this.canAccessProfile(user, event.profile)
+        && socket.rooms.has(`pending-interactions:${event.profile}`))
+    })
     const socketUser = socket.data.user as AuthenticatedUser | undefined
     const socketProfile = (socket.handshake.query?.profile as string) || 'default'
     const currentProfile = () => socketProfile || getActiveProfileName() || 'default'
+    const mobileTarget = socket.data.mobileDeviceTarget as MobileDeviceTarget | undefined
+    if (mobileTarget) socket.join(mobileDeviceRoom(mobileTarget))
     socket.join(`pending-interactions:${currentProfile()}`)
     socket.emit('session.activity.snapshot', {
       event: 'session.activity.snapshot',
@@ -804,6 +1155,136 @@ export class ChatRunSocket {
         })
       }
     })
+
+    socket.on('location.respond', (data: {
+      session_id?: string
+      location_request_id?: string
+      status?: string
+      location?: unknown
+      error?: unknown
+    }) => {
+      if (!data.session_id || !data.location_request_id) return
+      try {
+        requireSocketSessionAccess(data.session_id)
+      } catch (err) {
+        socket.emit('location.resolved', {
+          event: 'location.resolved',
+          session_id: data.session_id,
+          location_request_id: data.location_request_id,
+          resolved: false,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return
+      }
+      const pending = this.pendingMobileLocations.get(data.location_request_id)
+      if (!pending || pending.sessionId !== data.session_id) {
+        this.emitToSession(socket, data.session_id, 'location.resolved', {
+          event: 'location.resolved',
+          location_request_id: data.location_request_id,
+          resolved: false,
+          stale: true,
+          error: 'Location request is no longer pending.',
+        })
+        return
+      }
+      const response = normalizeMobileLocationResponse(data)
+      if (!response) {
+        this.finishMobileLocationRequest(data.location_request_id, {
+          status: 'error',
+          error: { code: 'location_invalid_result' },
+        })
+        return
+      }
+      this.finishMobileLocationRequest(data.location_request_id, response)
+    })
+    const respondMobileCalendar = (
+      capability: MobileCalendarCapability,
+      data: {
+        session_id?: string
+        calendar_request_id?: string
+        reminder_request_id?: string
+        status?: string
+        result?: unknown
+        error?: unknown
+      },
+    ) => {
+      const requestId = capability === 'reminder' ? data.reminder_request_id : data.calendar_request_id
+      const resolvedEvent = capability === 'reminder' ? 'reminder.resolved' : 'calendar.resolved'
+      const idKey = capability === 'reminder' ? 'reminder_request_id' : 'calendar_request_id'
+      if (!data.session_id || !requestId) return
+      try {
+        requireSocketSessionAccess(data.session_id)
+      } catch (err) {
+        socket.emit(resolvedEvent, {
+          event: resolvedEvent,
+          session_id: data.session_id,
+          [idKey]: requestId,
+          resolved: false,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return
+      }
+      const pending = this.pendingMobileCalendar.get(requestId)
+      if (!pending || pending.sessionId !== data.session_id || pending.request.capability !== capability) {
+        this.emitToSession(socket, data.session_id, resolvedEvent, {
+          event: resolvedEvent,
+          [idKey]: requestId,
+          resolved: false,
+          stale: true,
+          error: 'Calendar or reminder request is no longer pending.',
+        })
+        return
+      }
+      if (!sameMobileDevice(pending.target, socket.data.mobileDeviceTarget)) {
+        socket.emit(resolvedEvent, { event: resolvedEvent, session_id: data.session_id, [idKey]: requestId, resolved: false, error: 'Response is not from the target device' })
+        return
+      }
+      const response = normalizeMobileCalendarResponse(data, pending.request)
+      if (!response) {
+        this.finishMobileCalendarRequest(requestId, {
+          status: 'error',
+          error: { code: 'calendar_invalid_request' },
+        })
+        return
+      }
+      this.finishMobileCalendarRequest(requestId, response)
+    }
+    socket.on('calendar.respond', data => respondMobileCalendar('calendar', data))
+    socket.on('reminder.respond', data => respondMobileCalendar('reminder', data))
+    socket.on('health.respond', (data: {
+      session_id?: string
+      health_request_id?: string
+      status?: string
+      result?: unknown
+      error?: unknown
+    }) => {
+      if (!data.session_id || !data.health_request_id) return
+      try {
+        requireSocketSessionAccess(data.session_id)
+      } catch (err) {
+        socket.emit('health.resolved', { event: 'health.resolved', session_id: data.session_id, health_request_id: data.health_request_id, resolved: false, error: err instanceof Error ? err.message : String(err) })
+        return
+      }
+      const pending = this.pendingMobileHealth.get(data.health_request_id)
+      if (!pending || pending.sessionId !== data.session_id) {
+        this.emitToSession(socket, data.session_id, 'health.resolved', { event: 'health.resolved', health_request_id: data.health_request_id, resolved: false, stale: true, error: 'Health request is no longer pending.' })
+        return
+      }
+      if (!sameMobileDevice(pending.target, socket.data.mobileDeviceTarget)) {
+        socket.emit('health.resolved', { event: 'health.resolved', session_id: data.session_id, health_request_id: data.health_request_id, resolved: false, error: 'Response is not from the target device' })
+        return
+      }
+      if (!mobileHealthResponseSourceMatches(data, pending.target.deviceCode)) {
+        this.finishMobileHealthRequest(data.health_request_id, { status: 'error', error: { code: 'health_invalid_request' } })
+        return
+      }
+      const response = normalizeMobileHealthResponse(data, pending.request)
+      if (!response) {
+        this.finishMobileHealthRequest(data.health_request_id, { status: 'error', error: { code: 'health_invalid_request' } })
+        return
+      }
+      this.finishMobileHealthRequest(data.health_request_id, response)
+    })
   }
 
   respondCodingAgentApproval(sessionId: string, approvalId: string, choice: string): boolean {
@@ -873,6 +1354,28 @@ export class ChatRunSocket {
     backgroundContinuationContext?: BackgroundContinuationContext,
   ) {
     const source = resolveRunSource(data.source, data.session_id)
+    if (data.session_id) {
+      const target = socket.data?.mobileDeviceTarget as MobileDeviceTarget | undefined
+      if (target && target.profile === profile && source !== 'workflow' && source !== 'group_chat' && !backgroundContinuationContext) {
+        this.mobileRunTargets.set(data.session_id, { ...target })
+      } else this.mobileRunTargets.delete(data.session_id)
+    }
+    const locationInstruction = mobileLocationRunInstruction(data.session_id, source)
+    if (locationInstruction) {
+      data.instructions = [String(data.instructions || '').trim(), locationInstruction]
+        .filter(Boolean)
+        .join('\n\n')
+    }
+    const calendarInstruction = mobileCalendarRunInstruction(data.session_id, source)
+    if (calendarInstruction) {
+      data.instructions = [String(data.instructions || '').trim(), calendarInstruction]
+        .filter(Boolean)
+        .join('\n\n')
+    }
+    const healthInstruction = mobileHealthRunInstruction(data.session_id, source)
+    if (healthInstruction) {
+      data.instructions = [String(data.instructions || '').trim(), healthInstruction].filter(Boolean).join('\n\n')
+    }
     if (data.session_id) {
       const state = getOrCreateSession(this.sessionMap, data.session_id)
       state.webhookAgent = webhookAgentForRun(data)
@@ -1319,7 +1822,8 @@ export class ChatRunSocket {
         .filter(message => String(message.display_role || message.role || '') === 'assistant')
         .map(message => message.id),
     )
-    const resumePage = { ...messagePage, workspaceRunChanges }
+    const taskPlans = getSessionTaskPlans(sid, messagePage.messages, true, state.runId)
+    const resumePage = { ...messagePage, workspaceRunChanges, taskPlans }
     const appMessagePage = options
       ? buildAppResumeMessagePage(resumePage, options.cachedId)
       : null
@@ -1327,6 +1831,7 @@ export class ChatRunSocket {
     socket.emit(options?.event || 'resumed', {
       session_id: sid,
       ...outboundMessagePage,
+      taskPlans,
       parentSessionId: sessionDetail?.parent_session_id || null,
       forkPointMessageId: sessionDetail?.fork_point_message_id || null,
       parentTitle: sessionDetail?.parent_title || null,
@@ -1341,7 +1846,9 @@ export class ChatRunSocket {
       isWorking: state.isWorking,
       runStartedAt: state.runStartedAt,
       isAborting: state.isAborting || false,
-      events: buildResumeEvents(resumeEvents),
+      events: buildResumeEvents(resumeEvents.filter(entry =>
+        !['calendar.requested', 'reminder.requested', 'calendar.resolved', 'reminder.resolved', 'health.requested', 'health.resolved'].includes(entry.event)
+        || mobileEventAllowed(entry.data, socket.data.mobileDeviceTarget))),
       inputTokens: state.inputTokens,
       outputTokens: state.outputTokens,
       contextTokens: state.contextTokens,
@@ -1474,9 +1981,9 @@ export class ChatRunSocket {
   private queueInsertionRuntime(sessionId: string, state: SessionState): QueueInsertionRuntime | null {
     const storedAgent = String(getSession(sessionId)?.agent || '').trim()
     const activeAgent = state.webhookAgent
-      || (storedAgent === 'ekko-agent' ? 'ekko' : storedAgent === 'claude' ? 'claude-code' : storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : 'bridge')
+      || (storedAgent === 'ekko-agent' ? 'ekko' : storedAgent === 'claude' ? 'claude-code' : storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : storedAgent === 'grok' ? 'grok' : storedAgent === 'dsh' ? 'dsh' : storedAgent === 'opencode' ? 'opencode' : 'bridge')
     if (activeAgent === 'ekko') return 'ekko'
-    if (activeAgent === 'claude-code' || activeAgent === 'codex' || activeAgent === 'pi') return activeAgent
+    if (activeAgent === 'claude-code' || activeAgent === 'codex' || activeAgent === 'pi' || activeAgent === 'grok' || (activeAgent === 'opencode' || activeAgent === 'dsh')) return activeAgent
     if (activeAgent !== 'bridge') return null
     if (state.source === 'coding_agent') return null
     return state.source === 'cli' || state.source === 'global_agent' ? 'hermes' : null
@@ -1562,7 +2069,7 @@ export class ChatRunSocket {
     if (!state || !control || control.generation !== generation || control.phase !== 'requesting' || !control.runId) return
 
     try {
-      if (control.runtime === 'claude-code' || control.runtime === 'codex' || control.runtime === 'pi') {
+      if (control.runtime === 'claude-code' || control.runtime === 'codex' || control.runtime === 'pi' || control.runtime === 'grok' || (control.runtime === 'opencode' || control.runtime === 'dsh')) {
         control.phase = 'stopping_current_turn'
         this.emitQueueInsertionUpdate(sessionId, control)
         const result = await codingAgentRunManager.interruptForQueueInsertion(sessionId, control.runId)
@@ -1935,6 +2442,7 @@ export class ChatRunSocket {
   async abortSession(sessionId: string, reason = 'Run canceled'): Promise<void> {
     const sid = String(sessionId || '').trim()
     if (!sid) return
+    this.mobileRunTargets.delete(sid)
     const fakeSocket = {
       id: `workflow-abort-${sid}`,
       connected: false,
@@ -1960,6 +2468,24 @@ export class ChatRunSocket {
   async disposeSession(sessionId: string): Promise<void> {
     const sid = String(sessionId || '').trim()
     if (!sid) return
+    for (const [requestId, pending] of this.pendingMobileLocations.entries()) {
+      if (pending.sessionId !== sid) continue
+      this.finishMobileLocationRequest(requestId, {
+        status: 'error',
+        error: { code: 'location_failed' },
+      })
+    }
+    for (const [requestId, pending] of this.pendingMobileCalendar.entries()) {
+      if (pending.sessionId !== sid) continue
+      this.finishMobileCalendarRequest(requestId, {
+        status: 'error',
+        error: { code: 'calendar_failed' },
+      })
+    }
+    for (const [requestId, pending] of this.pendingMobileHealth.entries()) {
+      if (pending.sessionId !== sid) continue
+      this.finishMobileHealthRequest(requestId, { status: 'error', error: { code: 'health_failed' } })
+    }
     codingAgentRunManager.stop(sid, { reportClosed: false })
     const state = this.sessionMap.get(sid)
     state?.abortController?.abort()
@@ -1979,14 +2505,14 @@ export class ChatRunSocket {
       sessionId,
       profile,
       source: state?.source || session?.source || 'coding_agent',
-      agent: state?.webhookAgent || (storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : storedAgent === 'ekko-agent' ? 'ekko' : 'claude-code'),
+      agent: state?.webhookAgent || (storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : storedAgent === 'grok' ? 'grok' : storedAgent === 'dsh' ? 'dsh' : storedAgent === 'opencode' ? 'opencode' : storedAgent === 'ekko-agent' ? 'ekko' : 'claude-code'),
       payload: tagged,
       roomId: state?.webhookRoomId,
       workflowId: state?.webhookWorkflowId,
       workflowNodeId: state?.webhookWorkflowNodeId,
     })
     this.observePetEvent(profile, event, tagged)
-    this.emitSessionActivity(profile, event, tagged)
+    this.emitPendingInteraction(profile, event, tagged)
     if (state?.isWorking) {
       state.events.push({ event, data: tagged })
       if (state.events.length > 200) state.events.splice(0, state.events.length - 200)
@@ -2119,6 +2645,127 @@ export class ChatRunSocket {
     }
   }
 
+  private finishMobileLocationRequest(
+    locationRequestId: string,
+    response: MobileLocationResponse,
+  ): boolean {
+    const pending = this.pendingMobileLocations.get(locationRequestId)
+    if (!pending) return false
+    this.pendingMobileLocations.delete(locationRequestId)
+    clearTimeout(pending.timer)
+    this.clearMobileLocationEventState(pending.sessionId, locationRequestId)
+    this.emitMobileLocationEvent(pending.profile, pending.sessionId, 'location.resolved', {
+      event: 'location.resolved',
+      location_request_id: locationRequestId,
+      status: response.status,
+      resolved: true,
+      ...(response.status === 'error' ? { error: response.error } : {}),
+    })
+    pending.resolve(response)
+    return true
+  }
+
+  private clearMobileLocationEventState(sessionId: string, locationRequestId: string): void {
+    const state = this.sessionMap.get(sessionId)
+    if (!state?.events.length) return
+    state.events = state.events.filter(({ event, data }) => {
+      if (event !== 'location.requested' && event !== 'location.resolved') return true
+      return data?.location_request_id !== locationRequestId
+    })
+  }
+
+  private emitMobileLocationEvent(
+    profile: string,
+    sessionId: string,
+    event: 'location.requested' | 'location.resolved',
+    payload: Record<string, unknown>,
+  ): void {
+    const tagged = { ...payload, session_id: sessionId }
+    const state = this.sessionMap.get(sessionId)
+    if (event === 'location.requested' && state) {
+      state.events = state.events.filter(({ event: current }) =>
+        current !== 'location.requested' && current !== 'location.resolved')
+      state.events.push({ event, data: tagged })
+    }
+    this.nsp.to(`session:${sessionId}`).emit(event, tagged)
+    this.emitPendingInteraction(profile, event, tagged)
+  }
+
+  private finishMobileCalendarRequest(requestId: string, response: MobileCalendarResponse): boolean {
+    const pending = this.pendingMobileCalendar.get(requestId)
+    if (!pending) return false
+    this.pendingMobileCalendar.delete(requestId)
+    clearTimeout(pending.timer)
+    this.clearMobileCalendarEventState(pending.sessionId, requestId)
+    const event = pending.request.capability === 'reminder' ? 'reminder.resolved' : 'calendar.resolved'
+    const idKey = pending.request.capability === 'reminder' ? 'reminder_request_id' : 'calendar_request_id'
+    this.emitMobileCalendarEvent(pending.profile, pending.sessionId, event, {
+      event,
+      [idKey]: requestId,
+      target_device_id: pending.target.deviceCode,
+      target_user_id: pending.target.userId,
+      target_profile: pending.target.profile,
+      status: response.status,
+      resolved: true,
+      ...(response.status === 'error' ? { error: response.error } : {}),
+    })
+    pending.resolve({ ...response, device_id: mobileDeviceId(pending.target) })
+    return true
+  }
+  private finishMobileHealthRequest(requestId: string, response: MobileHealthResponse): boolean {
+    const pending = this.pendingMobileHealth.get(requestId)
+    if (!pending) return false
+    this.pendingMobileHealth.delete(requestId)
+    clearTimeout(pending.timer)
+    this.clearMobileHealthEventState(pending.sessionId, requestId)
+    this.emitMobileHealthEvent(pending.sessionId, 'health.resolved', {
+      event: 'health.resolved',
+      health_request_id: requestId,
+      target_device_id: pending.target.deviceCode,
+      target_user_id: pending.target.userId,
+      target_profile: pending.target.profile,
+      status: response.status,
+      resolved: true,
+      ...(response.status === 'error' ? { error: response.error } : {}),
+    })
+    pending.resolve({ ...response, device_id: mobileDeviceId(pending.target) })
+    return true
+  }
+  private clearMobileHealthEventState(sessionId: string, requestId: string): void {
+    const state = this.sessionMap.get(sessionId)
+    if (!state?.events.length) return
+    state.events = state.events.filter(({ event, data }) =>
+      !['health.requested', 'health.resolved'].includes(event) || data?.health_request_id !== requestId)
+  }
+  private emitMobileHealthEvent(sessionId: string, event: 'health.requested' | 'health.resolved', payload: any): void {
+    const tagged = { ...payload, session_id: sessionId }
+    if (event === 'health.requested') {
+      const state = getOrCreateSession(this.sessionMap, sessionId)
+      state.events = state.events.filter(({ event: current }) => !['health.requested', 'health.resolved'].includes(current))
+      state.events.push({ event, data: tagged })
+    }
+    const target: MobileDeviceTarget = { deviceCode: payload.target_device_id, userId: payload.target_user_id, profile: payload.target_profile }
+    this.nsp.to(mobileDeviceRoom(target)).emit(event, tagged)
+  }
+  private clearMobileCalendarEventState(sessionId: string, requestId: string): void {
+    const state = this.sessionMap.get(sessionId)
+    if (!state?.events.length) return
+    state.events = state.events.filter(({ event, data }) => {
+      if (!['calendar.requested', 'calendar.resolved', 'reminder.requested', 'reminder.resolved'].includes(event)) return true
+      return data?.calendar_request_id !== requestId && data?.reminder_request_id !== requestId
+    })
+  }
+  private emitMobileCalendarEvent(profile: string, sessionId: string, event: string, payload: any): void {
+    const tagged = { ...payload, session_id: sessionId }
+    if (event === 'calendar.requested' || event === 'reminder.requested') {
+      const state = getOrCreateSession(this.sessionMap, sessionId)
+      state.events = state.events.filter(({ event: current }) =>
+        !['calendar.requested', 'calendar.resolved', 'reminder.requested', 'reminder.resolved'].includes(current))
+      state.events.push({ event, data: tagged })
+    }
+    const target: MobileDeviceTarget = { deviceCode: payload.target_device_id, userId: payload.target_user_id, profile: payload.target_profile }
+    this.nsp.to(mobileDeviceRoom(target)).emit(event, tagged)
+  }
   private emitToSession(socket: Socket, sessionId: string, event: string, payload: any) {
     const tagged = { ...payload, session_id: sessionId }
     const profile = this.resolvePetEventProfile(sessionId, tagged)
@@ -2130,7 +2777,7 @@ export class ChatRunSocket {
       sessionId,
       profile,
       source: state?.source || session?.source || 'chat',
-      agent: state?.webhookAgent || (storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : storedAgent === 'ekko-agent' ? 'ekko' : 'bridge'),
+      agent: state?.webhookAgent || (storedAgent === 'codex' ? 'codex' : storedAgent === 'pi' ? 'pi' : storedAgent === 'grok' ? 'grok' : storedAgent === 'dsh' ? 'dsh' : storedAgent === 'opencode' ? 'opencode' : storedAgent === 'ekko-agent' ? 'ekko' : 'bridge'),
       payload: tagged,
       roomId: state?.webhookRoomId,
       workflowId: state?.webhookWorkflowId,
@@ -2147,7 +2794,11 @@ export class ChatRunSocket {
   private emitPendingInteraction(profile: string, event: string, payload: any) {
     this.emitSessionActivity(profile, event, payload)
     if (event !== 'approval.requested' && event !== 'approval.resolved'
-      && event !== 'clarify.requested' && event !== 'clarify.resolved') return
+      && event !== 'clarify.requested' && event !== 'clarify.resolved'
+      && event !== 'location.requested' && event !== 'location.resolved'
+      && event !== 'calendar.requested' && event !== 'calendar.resolved'
+      && event !== 'reminder.requested' && event !== 'reminder.resolved'
+      && event !== 'health.requested' && event !== 'health.resolved') return
     const sessionId = typeof payload?.session_id === 'string' ? payload.session_id : ''
     const source = sessionId
       ? this.sessionMap.get(sessionId)?.source || getSession(sessionId)?.source
@@ -2203,6 +2854,21 @@ export class ChatRunSocket {
     if (this.backgroundPollTimer) {
       clearInterval(this.backgroundPollTimer)
       this.backgroundPollTimer = undefined
+    }
+    for (const requestId of [...this.pendingMobileLocations.keys()]) {
+      this.finishMobileLocationRequest(requestId, {
+        status: 'error',
+        error: { code: 'location_failed' },
+      })
+    }
+    for (const requestId of [...this.pendingMobileCalendar.keys()]) {
+      this.finishMobileCalendarRequest(requestId, {
+        status: 'error',
+        error: { code: 'calendar_failed' },
+      })
+    }
+    for (const requestId of [...this.pendingMobileHealth.keys()]) {
+      this.finishMobileHealthRequest(requestId, { status: 'error', error: { code: 'health_failed' } })
     }
     const releaseClaims: Array<Promise<unknown>> = []
     for (const [sessionId, state] of this.sessionMap.entries()) {

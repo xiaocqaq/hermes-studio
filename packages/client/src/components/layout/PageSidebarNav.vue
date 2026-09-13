@@ -53,7 +53,6 @@ function openWorkflow() {
   if (props.active === 'workflow') return
   void router.push({ name: 'hermes.workflow' })
 }
-
 </script>
 
 <template>

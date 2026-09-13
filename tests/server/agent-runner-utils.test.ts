@@ -38,7 +38,7 @@ describe('agent runner endpoint resolver', () => {
       'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     )
     expect(chatCompletionsUrl('https://api.z.ai/api/paas/v4')).toBe('https://api.z.ai/api/paas/v4/chat/completions')
-    expect(responsesUrl('https://api.apikey.fun/v1/')).toBe('https://api.apikey.fun/v1/responses')
+    expect(responsesUrl('https://api.apikey.fan/v1/')).toBe('https://api.apikey.fan/v1/responses')
   })
 
   it('does not duplicate existing endpoint paths', () => {
@@ -50,7 +50,7 @@ describe('agent runner endpoint resolver', () => {
   })
 
   it('handles Anthropic-compatible roots', () => {
-    expect(anthropicMessagesUrl('https://api.apikey.fun')).toBe('https://api.apikey.fun/v1/messages')
+    expect(anthropicMessagesUrl('https://api.apikey.fan')).toBe('https://api.apikey.fan/v1/messages')
     expect(anthropicMessagesUrl('https://api.z.ai/api/anthropic')).toBe('https://api.z.ai/api/anthropic/v1/messages')
     expect(providerEndpointUrl('anthropic_messages', 'https://api.example.com/v1')).toBe('https://api.example.com/v1/messages')
   })
@@ -2327,6 +2327,82 @@ describe('response stream tool detail events', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('OpenCode JSON stream mapping', () => {
+  it('ignores scoped proxy lifecycle events and accepts native stdout once', () => {
+    const manager = new CodingAgentRunManager()
+    const emitted: Array<{ event: string; payload: any }> = []
+    ;(manager as any).emitToChat = (_sessionId: string, event: string, payload: any) => {
+      emitted.push({ event, payload })
+    }
+    ;(manager as any).ensureDbSession = () => {}
+    const run: any = {
+      id: 'agent-session-opencode-native',
+      launch: {
+        agentSessionId: 'agent-session-opencode-native',
+        agentId: 'opencode',
+        mode: 'scoped',
+        profile: 'default',
+        provider: 'test',
+        model: 'opencode-test',
+        sessionId: 'chat-session-opencode-native',
+        command: 'opencode',
+        args: [],
+        shellCommand: 'opencode',
+        workspaceDir: process.cwd(),
+      },
+      state: { messages: [], isWorking: false, events: [], queue: [] },
+      lastActiveAt: Date.now(),
+      startedAt: Date.now(),
+      exited: false,
+      currentChild: { exitCode: null, signalCode: null, killed: false },
+      printResponseId: 'resp_opencode_native',
+      printMessageId: 'msg_resp_opencode_native',
+      printText: '',
+      printTextStarted: false,
+      printCompleted: false,
+      responseStartEmitted: true,
+      terminalEventHandled: false,
+    }
+    ;(manager as any).runs.set(run.id, run)
+
+    manager.handleResponseEvent(run.id, {
+      type: 'response.output_text.delta',
+      data: { type: 'response.output_text.delta', delta: 'proxy duplicate' },
+    })
+    manager.handleResponseEvent(run.id, {
+      type: 'response.completed',
+      data: {
+        response: {
+          id: 'proxy-step-1',
+          status: 'completed',
+          output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'proxy duplicate' }] }],
+        },
+      },
+    })
+
+    expect(emitted).toEqual([])
+    expect(run.terminalEventHandled).toBe(false)
+    expect(run.state.messages).toEqual([])
+
+    ;(manager as any).handleOpenCodeLine(run, JSON.stringify({
+      type: 'text',
+      sessionID: 'ses_opencode_native',
+      part: { type: 'text', text: '您好！有什么可以帮您？', time: { end: Date.now() } },
+    }))
+    ;(manager as any).handleOpenCodeLine(run, JSON.stringify({
+      type: 'text',
+      sessionID: 'ses_opencode_native',
+      part: { type: 'text', text: '您好！有什么可以帮您？', time: { end: Date.now() } },
+    }))
+
+    expect(emitted.filter(event => event.event === 'message.delta').map(event => event.payload.delta)).toEqual([
+      '您好！有什么可以帮您？',
+    ])
+    expect(run.printText).toBe('您好！有什么可以帮您？')
+    expect(run.launch.agentNativeSessionId).toBe('ses_opencode_native')
   })
 })
 

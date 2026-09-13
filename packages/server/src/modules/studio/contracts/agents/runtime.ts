@@ -1,9 +1,9 @@
 import type { AgentFamily } from './family'
 
-export const AGENT_RUNTIMES = ['hermes', 'ekko', 'claude-code', 'codex', 'pi'] as const
+export const AGENT_RUNTIMES = ['hermes', 'ekko', 'claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'] as const
 
 export type AgentRuntime = typeof AGENT_RUNTIMES[number]
-export type CodingAgentRuntime = Extract<AgentRuntime, 'claude-code' | 'codex' | 'pi'>
+export type CodingAgentRuntime = Extract<AgentRuntime, 'claude-code' | 'codex' | 'pi' | 'grok' | 'opencode' | 'dsh'>
 
 const AGENT_RUNTIME_SET = new Set<string>(AGENT_RUNTIMES)
 
@@ -13,6 +13,9 @@ const RUNTIME_FAMILIES: Record<AgentRuntime, AgentFamily> = {
   'claude-code': 'coding',
   codex: 'coding',
   pi: 'coding',
+  grok: 'coding',
+  opencode: 'coding',
+  dsh: 'coding',
 }
 
 export function isAgentRuntime(value: unknown): value is AgentRuntime {

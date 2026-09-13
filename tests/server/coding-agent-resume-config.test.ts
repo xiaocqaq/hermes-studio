@@ -375,8 +375,12 @@ describe('coding agent resumed session config', () => {
       nativeResume: false,
       provider: 'global',
       model: '',
-      env: {},
+      env: {
+        HERMES_STUDIO_SESSION_ID: 'session-1',
+        CODEX_HOME: expect.stringContaining(join('coding-agent', 'model', 'default', 'global', 'codex', 'runs')),
+      },
       args: [],
+      promptFile: expect.stringContaining(join('AGENTS.md')),
     }))
     expect(updateSessionMock).toHaveBeenCalledWith('session-1', expect.objectContaining({
       agent_mode: 'global',
@@ -405,7 +409,7 @@ describe('coding agent resumed session config', () => {
     const { startCodingAgentRun } = await import('../../packages/server/src/bootstrap/coding-agents')
     const result = await startCodingAgentRun('codex', {
       sessionId: 'session-1',
-      baseUrl: 'https://api.apikey.fun/v1',
+      baseUrl: 'https://api.apikey.fan/v1',
       apiKey: 'sk-test',
     })
 
@@ -437,6 +441,30 @@ describe('coding agent resumed session config', () => {
       apiMode: 'codex_responses',
     })).rejects.toThrow('does not support OAuth/subscription providers')
     expect(startRunMock).not.toHaveBeenCalled()
+  })
+
+  it('starts and resumes OpenCode Free without reading upstream credentials', async () => {
+    makeHome()
+    getSessionMock.mockReturnValue({
+      id: 'session-free', profile: 'default', source: 'coding_agent', agent: 'codex',
+      agent_session_id: 'agent-session-1', provider: 'opencode-free', model: 'muse-spark-free',
+    })
+    safeReadFileMock.mockResolvedValue('')
+    const { startCodingAgentRun } = await import('../../packages/server/src/bootstrap/coding-agents')
+    await startCodingAgentRun('codex', { sessionId: 'session-free' })
+    const resumed = startRunMock.mock.calls[0][0]
+    expect(resumed.provider).toBe('opencode-free')
+    expect(resumed.model).toBe('muse-spark-free')
+    expect(readConfigYamlForProfileMock).not.toHaveBeenCalled()
+    getSessionMock.mockReturnValue(null)
+    await startCodingAgentRun('codex', {
+      sessionId: 'session-new-free', provider: 'opencode-free', model: 'mimo-v2.5-free',
+      apiKey: 'stale-key', baseUrl: 'https://stale.example/v1',
+    })
+    expect(startRunMock).toHaveBeenCalledTimes(2)
+    const started = startRunMock.mock.calls[1][0]
+    expect(started.provider).toBe('opencode-free')
+    expect(started.model).toBe('mimo-v2.5-free')
   })
 
   it('fails clearly instead of launching Claude without scoped credentials', async () => {

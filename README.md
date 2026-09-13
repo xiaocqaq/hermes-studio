@@ -1,24 +1,25 @@
 <p align="center">
-  <strong>Hermes Studio</strong>
+  <strong>Ekko Studio</strong>
   <a href="./README_zh.md">中文</a>
 </p>
 
 <p align="center">
-  A multi-agent desktop app, local runtime, and web console for<br/>
-  <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>, Ekko, Claude Code, Codex, and Pi.<br/>
-  Run chats, groups, workflows, coding tasks, voice, files, and devices from one local-first workspace.
+  A local-first AI workspace for multi-agent chat, coding, and visual workflows.<br/>
+  Available as a desktop app and self-hosted web console, with support for<br/>
+  <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>, Ekko Agent, Claude Code, Codex, Pi, Grok, OpenCode, and DeepSeek Harness (DSH).<br/>
+  Bring conversations, group collaboration, voice, files, and devices together in one place.
 </p>
 
 <p align="center">
-  <a href="https://github.com/EKKOLearnAI/hermes-studio/releases/latest">Download Hermes Studio Desktop</a>
+  <a href="https://github.com/EKKOLearnAI/hermes-studio/releases/latest">Download Ekko Studio Desktop</a>
   ·
-  <a href="https://hermes-studio.ai/#/docs/getting-started">Documentation</a>
+  <a href="https://ekkostudio.xyz/#/docs/getting-started">Documentation</a>
   ·
   <code>npm install -g hermes-web-ui && hermes-web-ui start</code>
 </p>
 
 <p align="center">
-  <img src="https://github.com/EKKOLearnAI/hermes-studio/blob/main/packages/client/src/assets/image.gif" alt="Hermes Studio Demo" width="680"/>
+  <img src="./docs/screenshots/overview/workspace.png" alt="Ekko Studio workspace with an example conversation" width="960"/>
 </p>
 
 <p align="center">
@@ -27,27 +28,49 @@
   <a href="https://github.com/EKKOLearnAI/hermes-studio/stargazers"><img src="https://img.shields.io/github/stars/EKKOLearnAI/hermes-studio?style=flat-square" alt="stars"/></a>
 </p>
 
+Ekko Studio was previously named Hermes Studio / Hermes Web UI. The GitHub
+repository remains `EKKOLearnAI/hermes-studio`, and the npm package and server CLI
+remain `hermes-web-ui`; use these names in clone and installation commands.
+
+## Screenshots
+
+Captured in Ekko Studio **v0.7.18** on 2026-09-10. Chat and workflow screens use demo data.
+
+| Visual workflows | Agent Manager |
+| --- | --- |
+| [![Visual workflow connecting research, coding, and review](./docs/screenshots/overview/workflow.png)](./docs/screenshots/overview/workflow.png) | [![Seven agent runtimes in Agent Manager](./docs/screenshots/overview/agent-manager.png)](./docs/screenshots/overview/agent-manager.png) |
+| Connect agent steps and add a human approval gate. | Manage agent installations, settings, and updates in one place. |
+
+<details>
+<summary>Explore the Skills interface</summary>
+
+Browse installed skills, read their instructions, and enable them as needed.
+
+![Ekko Agent Skills browser showing the GitHub skill](./docs/screenshots/overview/skills.png)
+
+</details>
+
 ## Core Capabilities
 
-| Area | What Hermes Studio does |
+| Area | What Ekko Studio does |
 | --- | --- |
-| Multi-agent runtime | Runs Hermes, Ekko, Claude Code, Codex, and Pi with streaming responses, tool traces, generated-file previews, persistent sessions, and standalone desktop chat windows. |
+| Multi-agent runtime | Runs Hermes, Ekko, Claude Code, Codex, Pi, Grok, OpenCode, and DeepSeek Harness (DSH) with streaming responses, tool traces, generated-file previews, persistent sessions, and standalone desktop chat windows. |
 | Studio workspace | Provides shared chats, group chat, global-agent runs, workflows, files, voice, media, devices, themes, logs, usage, and App connectivity across agent runtimes. |
 | Agent control planes | Keeps Hermes profiles, providers, models, memory, skills, plugins, jobs, Kanban, channels, and runtime management in their owning agent module. |
-| Automation | Builds executable visual workflows and connects the five runtimes through schedules, approval gates, group-chat rooms, platform channels, and MCP servers. |
+| Automation | Builds executable visual workflows and connects the supported runtimes through schedules, approval gates, group-chat rooms, platform channels, and MCP servers. |
 | Workspace tools | Provides a file browser, web terminal, Desktop Agent Browser, voice input/output, coding-agent runners, device discovery, Journey graph, and performance views. |
 | Distribution | Ships as a desktop app for Windows/macOS/Linux, an npm CLI package, and a Docker image. |
 
 ## Agent and Platform Boundaries
 
-Hermes Studio is the shared product platform, not a sixth agent. It coordinates
-five concrete runtimes grouped into three agent families:
+Ekko Studio provides a shared workspace for its supported agent runtimes,
+grouped into three agent families:
 
 | Agent family | Runtime | Owned behavior |
 | --- | --- | --- |
 | Hermes | Hermes | Profiles, providers, models, skills, plugins, memory, jobs, Kanban, channels, MCP, terminal, and Hermes runtime integration. |
 | Ekko | Ekko | Ekko execution, approvals, clarifications, memory, MCP, and provider runtime behavior. |
-| Coding | Claude Code, Codex, Pi | Coding-agent installation, configuration, proxies, sessions, and process execution. |
+| Coding | Claude Code, Codex, Pi, Grok, OpenCode, DSH | Coding-agent installation, configuration, proxies, sessions, and process execution. |
 
 Studio owns capabilities shared by those families: single chat, group chat,
 global-agent orchestration, workflows, webhooks, sessions, files and uploads,
@@ -61,7 +84,7 @@ controllers.
 
 ### AI Chat
 
-- Real-time chat streaming over Socket.IO `/chat-run`; Studio dispatches each run to Hermes, Ekko, Claude Code, Codex, or Pi through runtime adapters
+- Real-time chat streaming over Socket.IO `/chat-run`; Studio dispatches each run to Hermes, Ekko, Claude Code, Codex, Pi, Grok, OpenCode, or DSH through runtime adapters
 - Multi-session management — create, rename, delete, switch between sessions
 - **Self-built session database** — local SQLite storage for Studio sessions; Hermes state.db remains a read-only source for Hermes history APIs
 - Session grouping by source (Telegram, Discord, Slack, etc.) with collapsible accordion
@@ -120,7 +143,7 @@ Unified configuration for **10 platforms** in one page:
 
 ### Visual Workflows
 
-- Vue Flow canvas for Hermes, Ekko, Claude Code, Codex, and Pi nodes with file/image attachments
+- Vue Flow canvas for Hermes, Ekko, Claude Code, Codex, Pi, Grok, OpenCode, and DeepSeek Harness (DSH) nodes with file/image attachments
 - Directed edges, structured conditions, success/failure routes, loops, and approval gates
 - Import/export for portable workflow definitions and profile-aware workspaces
 - Run budgets, deadlines, stop/rerun controls, and persisted execution history
@@ -165,10 +188,19 @@ Unified configuration for **10 platforms** in one page:
 
 ### Coding Agents
 
-- Install, configure, launch, and monitor Claude Code, Codex, and Pi from the dashboard
+- Install, configure, launch, and monitor Claude Code, Codex, Pi, Grok, OpenCode, and DeepSeek Harness (DSH) from the dashboard
 - Built-in coding-agent terminal, session history, workspace selection, images, and file diffs
 - Dedicated proxy routes and API modes for provider/model compatibility
 - Standalone desktop chat windows and persisted output/reasoning metadata
+
+#### DeepSeek Harness (DSH)
+
+- Use DSH in single chats, group-chat rooms, and workflow nodes, with Studio-selected providers/models or native global configuration.
+- Select an Agent preset when creating a chat, adding a group member, or configuring a workflow node; resumed conversations retain their selected preset.
+- Reuse the native `web` profile’s plugins. **Plugin configuration** embeds the plugins’ own settings UI with light/dark theme support; **Plugin list** manages installed packages. Agent presets have a separate Studio management page.
+- Manage DSH settings, instructions, MCP, and private skills. Shared `~/.agents/skills` entries are display-only in every Coding Agent page; editing and deletion are blocked.
+
+Install DSH on the machine running the Studio backend through Agent Manager. Native plugin installation requires `pnpm` on that machine’s PATH. See [DSH setup, profiles, and compatibility](docs/dsh-management.md) for details.
 
 ### Desktop Agent Browser
 
@@ -198,7 +230,7 @@ Unified configuration for **10 platforms** in one page:
 ### Admin & Runtime Management
 
 - Device and LAN peer views for local-network discovery and peer tooling
-- MCP manager for the managed `hermes-studio` server, profile injection, and `api` / `browser` / `devices` / `use` toolsets
+- MCP manager for the managed `ekko-studio-*` servers, profile injection, and `api` / `browser` / `devices` / `use` toolsets
 - Runtime version and version-preview tooling for testing newer builds in isolation
 - Performance monitor views for super administrators
 
@@ -258,7 +290,7 @@ hermes-web-ui reset-default-login
 - Bundles the Studio runtime and starts the local server automatically
 - Uses Cloudflare download endpoints for desktop auto-update metadata and assets first
 - Falls back to GitHub Releases `latest` assets if the Cloudflare update feed is unavailable
-- Windows upgrades attempt to close an existing Hermes Studio process before replacing files
+- Windows upgrades attempt to close an existing Ekko Studio process before replacing files
 
 ---
 
@@ -266,7 +298,7 @@ hermes-web-ui reset-default-login
 
 ### Desktop App (Recommended)
 
-Download the latest **Hermes Studio** desktop installer from
+Download the latest **Ekko Studio** desktop installer from
 [GitHub Releases](https://github.com/EKKOLearnAI/hermes-studio/releases/latest).
 
 Desktop builds are published for macOS, Windows, and Linux, with separate
@@ -281,14 +313,17 @@ desktop app, bundled Hermes Agent CLI, and bundled server CLI do not conflict:
 
 | Command | Description |
 | --- | --- |
-| `hermes-studio` | Open the Hermes Studio desktop app |
-| `hermes-studio cli ...` | Run the bundled Hermes Agent CLI |
-| `hermes-studio web ...` | Run the bundled `hermes-web-ui` command |
-| `hermes-studio -h` | Show wrapper help |
-| `hermes-studio-mcp [api\|browser\|devices\|use]` | Run one managed Studio MCP toolset |
+| `ekko-studio` | Open the Ekko Studio desktop app |
+| `ekko-studio cli ...` | Run the bundled Hermes Agent CLI |
+| `ekko-studio web ...` | Run the bundled `hermes-web-ui` command |
+| `ekko-studio -h` | Show wrapper help |
+| `ekko-studio-mcp [api\|browser\|devices\|use]` | Run one managed Studio MCP toolset |
 
-Use `hermes-studio cli -h` for Hermes Agent CLI help and
-`hermes-studio web -h` for server CLI help. `hermes-studio-mcp` defaults to the
+The desktop command is `ekko-studio`; the previous managed `hermes-studio`
+command is removed when the new shim is installed. No compatibility alias is created.
+
+Use `ekko-studio cli -h` for Hermes Agent CLI help and
+`ekko-studio web -h` for server CLI help. `ekko-studio-mcp` defaults to the
 `api` toolset; choose `browser`, `devices`, or `use` to keep the exposed MCP
 surface focused on the current task.
 
@@ -339,7 +374,7 @@ and package installs such as `pip install hermes-agent`.
 
 ## Studio Environment Variables
 
-These variables configure Hermes Studio, its local Hermes runtime integration, and development/preview helpers. Provider API keys and Hermes Agent settings are normally managed through Hermes profiles; environment variables here are process-level overrides.
+These variables configure Ekko Studio, its local Hermes runtime integration, and development/preview helpers. Provider API keys and Hermes Agent settings are normally managed through Hermes profiles; environment variables here are process-level overrides.
 
 | Variable | Default | Description |
 | --- | --- | --- |
@@ -350,7 +385,7 @@ These variables configure Hermes Studio, its local Hermes runtime integration, a
 | `HERMES_APP_ENTITLEMENT_PUBLIC_KEY` | built in | Optional PEM public-key override for RS256 App entitlements. The expected issuer is `hermes-studio-server` and audience is `ekko-studio`. |
 | `HERMES_WEB_UI_HOME` | `~/.hermes-web-ui` | Studio data home for auth token, credentials, logs, DB, and default uploads. `HERMES_WEBUI_STATE_DIR` is also supported as a compatibility alias. |
 | `HERMES_WEBUI_STATE_DIR` | unset | Compatibility alias for `HERMES_WEB_UI_HOME`. |
-| `HERMES_WEB_UI_DISABLE_MCP_AUTOINJECT` | unset | Disable startup injection of the managed `hermes-studio` MCP server into Hermes profile configs. |
+| `HERMES_WEB_UI_DISABLE_MCP_AUTOINJECT` | unset | Disable startup injection of the managed `ekko-studio-*` MCP servers into Hermes profile configs. |
 | `HERMES_WEB_UI_ALLOW_TRANSIENT_MCP_AUTOINJECT` | unset | Allow managed MCP injection when `HERMES_WEB_UI_HOME` is under a temporary directory, such as Version Preview runtimes. |
 | `UPLOAD_DIR` | `$HERMES_WEB_UI_HOME/upload` | Upload root override. Files are stored below profile-scoped subdirectories. |
 | `CORS_ORIGINS` | same host only | Comma- or space-separated cross-origin allowlist for HTTP, Socket.IO, and WebSocket requests. Set `*` only when you intentionally need legacy wildcard CORS. |
@@ -384,8 +419,8 @@ These variables configure Hermes Studio, its local Hermes runtime integration, a
 | `HERMES_BRIDGE_TOOLSETS` | profile/default | Toolset override for bridge runs. |
 | `HERMES_BRIDGE_MAX_TURNS` | profile/default | Maximum turn override for bridge runs. |
 | `HERMES_BRIDGE_SUPPRESS_PLATFORM_HINT` | `cli` | Controls bridge platform hint suppression passed to Hermes Agent. |
-| `HERMES_OPENROUTER_APP_REFERER` | `https://hermes-studio.ai` | OpenRouter attribution referer sent by bridge runs. |
-| `HERMES_OPENROUTER_APP_TITLE` | `Hermes Studio` | OpenRouter attribution title sent by bridge runs. |
+| `HERMES_OPENROUTER_APP_REFERER` | `https://ekkostudio.xyz` | OpenRouter attribution referer sent by bridge runs. |
+| `HERMES_OPENROUTER_APP_TITLE` | `Ekko Studio` | OpenRouter attribution title sent by bridge runs. |
 | `HERMES_OPENROUTER_APP_CATEGORIES` | `cli-agent,personal-agent` | OpenRouter attribution categories sent by bridge runs. |
 | `HERMES_WEB_UI_MANAGED_GATEWAY` | enabled | Controls Studio-managed Hermes gateway process handling. Set `0`, `false`, `no`, or `off` to use `hermes gateway start` instead. |
 | `HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART` | unset | Skip startup gateway checks/autostart. Set `1`, `true`, `yes`, or `on` for dashboard-only deployments where another service owns Hermes gateway lifecycle. |
@@ -416,7 +451,7 @@ These variables configure Hermes Studio, its local Hermes runtime integration, a
 | `hermes-web-ui update` / `upgrade` | Update to the latest version and restart |
 | `hermes-web-ui version` / `-v` | Show the version |
 | `hermes-web-ui -h` | Show help |
-| `hermes-web-ui-mcp [api\|browser\|devices\|use]` | Run one managed Studio MCP toolset (same as `hermes-studio-mcp`) |
+| `hermes-web-ui-mcp [api\|browser\|devices\|use]` | Run one managed Studio MCP toolset (same as `ekko-studio-mcp`) |
 
 Add `--no-open` to `start` or `client` when no browser should open.
 
@@ -468,7 +503,7 @@ Koa bootstrap (composition only)
           ├─ Hermes family ─── profiles, models, skills, memory, jobs,
           │                    Kanban, channels, terminal, Hermes bridge
           ├─ Ekko family ───── Ekko runtime and agent-owned services
-          └─ Coding family ─── Claude Code, Codex, and Pi adapters
+          └─ Coding family ─── Claude Code, Codex, Pi, Grok, OpenCode, DSH adapters
 ```
 
 The server is organized by business ownership under
@@ -493,6 +528,8 @@ full ownership tree, dependency rules, and API migration contract, see
 
 [BSL-1.1](./LICENSE)
 
-The license covers Hermes Studio, the `hermes-web-ui` npm package and CLI,
+The license covers Ekko Studio, the `hermes-web-ui` npm package and CLI,
 desktop applications, firmware, release
 artifacts, documentation, and associated files in this repository.
+
+The MCP entry point is `bin/ekko-studio-mcp.mjs`; tools use the `ekko_studio_*` prefix. Existing `hermes-studio-mcp` / `hermes-web-ui-mcp` commands and `hermes_studio_*` calls remain compatible. Restart the MCP client to discover the new tool names. Studio migrates managed server configurations to `ekko-studio-api`, `ekko-studio-browser`, `ekko-studio-devices`, and `ekko-studio-use`.

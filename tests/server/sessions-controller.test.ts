@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
+import { basename, join } from 'path'
 
 const listConversationSummariesFromDbMock = vi.fn()
 const getConversationDetailFromDbMock = vi.fn()
@@ -16,6 +16,7 @@ const getUsageStatsFromDbMock = vi.fn()
 const getSessionMock = vi.fn()
 const deleteHermesSessionForProfileMock = vi.fn()
 const localListSessionsMock = vi.fn()
+const localCountSessionsMock = vi.fn()
 const localGetSessionDetailMock = vi.fn()
 const localSearchSessionsMock = vi.fn()
 const localDeleteSessionMock = vi.fn()
@@ -50,6 +51,7 @@ const agentStatusMocks = vi.hoisted(() => ({ hermesAvailable: true }))
 const codingAgentRunManagerMock = vi.hoisted(() => ({
   stop: vi.fn(),
 }))
+const invalidateCodingAgentSessionRuntimeMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../../packages/server/src/modules/hermes/services/history/conversations-db', () => ({
   listConversationSummariesFromDb: listConversationSummariesFromDbMock,
@@ -95,6 +97,7 @@ vi.mock('../../packages/server/src/modules/hermes/services/history/sessions-db',
 
 vi.mock('../../packages/server/src/modules/studio/repositories/session-store', () => ({
   listSessions: localListSessionsMock,
+  countSessions: localCountSessionsMock,
   searchSessions: localSearchSessionsMock,
   getSessionDetail: localGetSessionDetailMock,
   deleteSession: localDeleteSessionMock,
@@ -235,6 +238,7 @@ vi.mock('../../packages/server/src/modules/studio/public/session-agent-runtime',
     )
   },
   stopCodingAgentSessionRun: codingAgentRunManagerMock.stop,
+  invalidateCodingAgentSessionRuntime: invalidateCodingAgentSessionRuntimeMock,
 }))
 
 vi.mock('../../packages/server/src/modules/studio/public/agent-status-registry', () => ({
@@ -258,6 +262,7 @@ describe('session conversations controller', () => {
     getSessionMock.mockReset()
     deleteHermesSessionForProfileMock.mockReset()
     localListSessionsMock.mockReset()
+    localCountSessionsMock.mockReset().mockReturnValue(0)
     localGetSessionDetailMock.mockReset()
     localSearchSessionsMock.mockReset()
     localDeleteSessionMock.mockReset()
@@ -313,6 +318,7 @@ describe('session conversations controller', () => {
     bridgeGetRuntimeStateMock.mockReset()
     bridgeGetRuntimeStateMock.mockReturnValue({ ready: false, running: false, endpoint: 'ipc:///tmp/hermes-agent-bridge.sock' })
     codingAgentRunManagerMock.stop.mockReset()
+    invalidateCodingAgentSessionRuntimeMock.mockReset()
   })
 
   it('lists conversations from the local session store', async () => {
@@ -348,7 +354,7 @@ describe('session conversations controller', () => {
     expect(ctx.body.sessions[0]).toMatchObject({ id: 'local-conversation', source: 'cli', title: 'Local' })
   })
 
-  it('serves bounded workspace preview bytes and blocks traversal, escaped links, and unauthorized profiles', async () => {
+  it('serves bounded workspace preview bytes from unrestricted local paths while preserving profile authorization', async () => {
     const workspace = await mkdtemp(join(tmpdir(), 'hermes-workspace-preview-'))
     const outside = await mkdtemp(join(tmpdir(), 'hermes-workspace-preview-outside-'))
     const hermesArtifactWorkspace = '/tmp/hermes-test/research/workspace'
@@ -404,28 +410,53 @@ describe('session conversations controller', () => {
         params: { id: 'session-preview' },
         query: { path: join(outside, 'secret.pdf') },
         state: { user: { id: 1, role: 'super_admin' } },
+        set: vi.fn(),
         body: null,
       }
       await mod.readWorkspaceFileContent(absoluteOutsideCtx)
-      expect(absoluteOutsideCtx).toMatchObject({ status: 400, body: { code: 'invalid_path' } })
+      expect(absoluteOutsideCtx.body).toEqual(Buffer.from('%PDF secret'))
 
       const traversalCtx: any = {
         params: { id: 'session-preview' },
-        query: { path: '../secret.pdf' },
+        query: { path: `../${basename(outside)}/secret.pdf` },
         state: { user: { id: 1, role: 'super_admin' } },
+        set: vi.fn(),
         body: null,
       }
       await mod.readWorkspaceFileContent(traversalCtx)
-      expect(traversalCtx).toMatchObject({ status: 400, body: { code: 'invalid_path' } })
+      expect(traversalCtx.body).toEqual(Buffer.from('%PDF secret'))
 
       const escapedCtx: any = {
         params: { id: 'session-preview' },
         query: { path: 'escaped.pdf' },
         state: { user: { id: 1, role: 'super_admin' } },
+        set: vi.fn(),
         body: null,
       }
       await mod.readWorkspaceFileContent(escapedCtx)
-      expect(escapedCtx).toMatchObject({ status: 400, body: { code: 'invalid_path' } })
+      expect(escapedCtx.body).toEqual(Buffer.from('%PDF secret'))
+
+      const absoluteWritePath = join(outside, 'written.txt')
+      const writeCtx: any = {
+        params: { id: 'session-preview' },
+        request: { body: { path: absoluteWritePath, content: 'written outside workspace' } },
+        state: { user: { id: 1, role: 'super_admin' } },
+        body: null,
+      }
+      await mod.writeWorkspaceFile(writeCtx)
+      expect(writeCtx.body).toMatchObject({ ok: true })
+      await expect(readFile(absoluteWritePath, 'utf8')).resolves.toBe('written outside workspace')
+
+      listUserProfilesMock.mockReturnValue([{ profile_name: 'research' }])
+      const regularAdminOutsideCtx: any = {
+        params: { id: 'session-preview' },
+        query: { path: join(outside, 'secret.pdf') },
+        state: { user: { id: 2, role: 'admin' } },
+        set: vi.fn(),
+        body: null,
+      }
+      await mod.readWorkspaceFileContent(regularAdminOutsideCtx)
+      expect(regularAdminOutsideCtx.body).toEqual(Buffer.from('%PDF secret'))
 
       const oversizedCtx: any = {
         params: { id: 'session-preview' },
@@ -967,6 +998,85 @@ describe('session conversations controller', () => {
       includeArchived: false,
       excludeSessionIds: [],
     })
+  })
+
+  it('returns a single-chat page with a lookahead row without changing legacy list responses', async () => {
+    localCountSessionsMock.mockReturnValue(5)
+    localListSessionsMock.mockReturnValue([
+      { id: 'chat-3', profile: 'travel', source: 'cli' },
+      { id: 'chat-2', profile: 'travel', source: 'cli' },
+      { id: 'chat-1', profile: 'travel', source: 'cli' },
+    ])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { profile: 'travel', offset: '2', limit: '2' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenCalledWith('travel', undefined, 3, expect.objectContaining({ offset: 2 }))
+    expect(ctx.body).toEqual({
+      sessions: [
+        expect.objectContaining({ id: 'chat-3' }),
+        expect.objectContaining({ id: 'chat-2' }),
+      ],
+      hasMore: true, offset: 2, limit: 2, total: 5,
+    })
+    localListSessionsMock.mockReturnValue([{ id: 'chat-1', profile: 'travel', source: 'cli' }])
+    ctx.query.offset = '4'
+    await mod.list(ctx)
+    expect(ctx.body).toMatchObject({ hasMore: false, offset: 4, limit: 2, total: 5 })
+    localCountSessionsMock.mockClear()
+    delete ctx.query.offset
+    await mod.list(ctx)
+    expect(ctx.body).not.toHaveProperty('hasMore')
+    expect(ctx.body).not.toHaveProperty('total')
+    expect(localCountSessionsMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['-1', 'NaN', '1.5'])('normalizes invalid single-chat offsets (%s)', async (offset) => {
+    localListSessionsMock.mockReturnValue([])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { offset, limit: '10' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(ctx.body).toEqual({ sessions: [], hasMore: false, offset: 0, limit: 10, total: 0 })
+  })
+
+  it.each([['7', 7], ['none', null]])('passes category %s and pin filters into the paginated query', async (category, categoryId) => {
+    localListSessionsMock.mockReturnValue([])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { category, offset: '10', limit: '10', exclude: ['pin-a', 'pin-b'] }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, 11, expect.objectContaining({
+      categoryId, offset: 10, excludeSessionIds: ['pin-a', 'pin-b'],
+    }))
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({
+      categoryId, excludeSessionIds: ['pin-a', 'pin-b'], includeArchived: false,
+    }))
+    ctx.query = { include: 'pin-a', offset: '0', limit: '10' }
+    await mod.list(ctx)
+    expect(localListSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, 11, expect.objectContaining({ includeSessionIds: ['pin-a'] }))
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({ includeSessionIds: ['pin-a'] }))
+  })
+
+  it('counts only accessible profiles and does not reveal totals for a forbidden explicit profile', async () => {
+    localListSessionsMock.mockReturnValue([])
+    localCountSessionsMock.mockReturnValue(27)
+    listUserProfilesMock.mockReturnValue([{ profile_name: 'default' }])
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { offset: '0', limit: '10' }, state: { user: { id: 'user-1', role: 'user' } } }
+    await mod.list(ctx)
+    expect(ctx.body.total).toBe(27)
+    expect(localCountSessionsMock).toHaveBeenLastCalledWith(undefined, undefined, expect.objectContaining({ profiles: ['default'] }))
+    localCountSessionsMock.mockClear()
+    ctx.query.profile = 'travel'
+    await mod.list(ctx)
+    expect(ctx.body.total).toBe(0)
+    expect(localCountSessionsMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['invalid', '-1', '1.5'])('rejects invalid session category %s', async category => {
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    const ctx: any = { query: { category, offset: '0' }, state: {}, body: null }
+    await mod.list(ctx)
+    expect(ctx.status).toBe(400)
+    expect(localListSessionsMock).not.toHaveBeenCalled()
   })
 
   it('lists only global-agent sessions when requested by source', async () => {
@@ -2005,6 +2115,19 @@ describe('session conversations controller', () => {
       reasoning_effort: 'high',
     })
     expect(ctx.body).toEqual({ ok: true, reasoning_effort: 'high' })
+  })
+
+  it('restarts a Grok runtime after changing session reasoning effort', async () => {
+    getSessionMock.mockReturnValue({ id: 'grok-session', profile: 'default', agent: 'grok' })
+
+    const mod = await import('../../packages/server/src/modules/studio/controllers/sessions')
+    await mod.setReasoningEffort({
+      params: { id: 'grok-session' },
+      request: { body: { reasoningEffort: 'max' } },
+      body: null,
+    } as any)
+
+    expect(invalidateCodingAgentSessionRuntimeMock).toHaveBeenCalledWith('grok-session')
   })
 
   it('deletes a current-profile Hermes history session even when no local Web UI session exists', async () => {

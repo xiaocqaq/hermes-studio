@@ -200,6 +200,12 @@ const router = createRouter({
       meta: { requiresSuperAdmin: true },
     },
     {
+      path: '/studio/agents/:agentId/:section(skills|mcp|settings|plugins|presets)',
+      name: 'codingAgent.config',
+      component: () => import('@/views/hermes/CodingAgentConfigView.vue'),
+      meta: { codingAgentConfig: true, requiresSuperAdmin: true },
+    },
+    {
       path: '/ekko/memory',
       name: 'ekko.memory',
       component: () => import('@/views/ekko/MemoryView.vue'),
@@ -303,6 +309,11 @@ function isDesktopShell(): boolean {
 
 router.beforeEach(async (to, _from, next) => {
   await ensureDesktopAuth()
+
+  if (to.name === 'codingAgent.config' && ['plugins', 'presets'].includes(String(to.params.section)) && to.params.agentId !== 'dsh') {
+    next({ name: 'codingAgent.config', params: { ...to.params, section: 'settings' }, replace: true })
+    return
+  }
 
   // Public pages don't need auth
   if (to.meta.public) {

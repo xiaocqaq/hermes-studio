@@ -419,6 +419,9 @@ const workflowAgentDefinitions: WorkflowSelectOption[] = [
   { label: 'Claude', value: 'claude-code' },
   { label: 'Codex', value: 'codex' },
   { label: 'Pi', value: 'pi' },
+  { label: 'Grok', value: 'grok' },
+  { label: 'OpenCode', value: 'opencode' },
+  { label: 'DeepSeek Harness', value: 'dsh' },
 ]
 
 const agentOptions = computed<WorkflowSelectOption[]>(() => workflowAgentDefinitions.map((option) => {
@@ -653,9 +656,11 @@ function makeNode(
     data: {
       title,
       agent,
+      agentMode: data.agentMode === 'global' && ['claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'].includes(agent) ? 'global' : 'scoped',
       provider: data.provider || defaultModelSelection.value.provider,
       model: data.model || defaultModelSelection.value.model,
       apiMode: data.apiMode || defaultApiMode(data.provider || defaultModelSelection.value.provider),
+      agentPreset: data.agentPreset,
       reasoningEffort: data.reasoningEffort || 'default',
       input: data.input || '',
       skills: data.skills || [],
@@ -1085,9 +1090,11 @@ function serializeWorkflowNodes(source: WorkflowNode[]): unknown[] {
     data: {
       title: node.data.title,
       agent: node.data.agent,
+      agentMode: node.data.agentMode,
       provider: node.data.provider,
       model: node.data.model,
       apiMode: node.data.apiMode,
+      agentPreset: node.data.agentPreset,
       reasoningEffort: node.data.reasoningEffort,
       input: node.data.input,
       skills: [...node.data.skills],
@@ -1143,9 +1150,11 @@ function normalizeStoredNode(raw: unknown, index: number): WorkflowNode {
     position,
     {
       agent: data.agent,
+      agentMode: data.agentMode === 'global' ? 'global' : 'scoped',
       provider: data.provider,
       model: data.model,
       apiMode: data.apiMode,
+      agentPreset: data.agentPreset,
       reasoningEffort: typeof data.reasoningEffort === 'string' ? data.reasoningEffort : 'default',
       input: data.input,
       skills: Array.isArray(data.skills) ? data.skills.filter(item => typeof item === 'string') : [],
@@ -2551,10 +2560,13 @@ function workflowValidationError(): string | null {
 
   for (const node of nodes.value) {
     const label = workflowNodeLabel(node)
+    if (node.data.agent === 'dsh' && (!node.data.agentPreset || node.data.agentPresetReady === false)) return t('dshPresets.selectMode')
     if (!node.data.title.trim()) return t('workflow.validation.nodeNameRequired', { node: node.id })
-    if (!node.data.provider.trim()) return t('workflow.validation.providerRequired', { node: label })
-    if (!node.data.model.trim()) return t('workflow.validation.modelRequired', { node: label })
-    if (node.data.agent !== 'hermes' && !node.data.apiMode) {
+    const usesGlobalCodingAgent = ['claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'].includes(node.data.agent)
+      && node.data.agentMode === 'global'
+    if (!usesGlobalCodingAgent && !node.data.provider.trim()) return t('workflow.validation.providerRequired', { node: label })
+    if (!usesGlobalCodingAgent && !node.data.model.trim()) return t('workflow.validation.modelRequired', { node: label })
+    if (!usesGlobalCodingAgent && node.data.agent !== 'hermes' && !node.data.apiMode) {
       return t('workflow.validation.apiModeRequired', { node: label })
     }
     if (!node.data.input.trim()) return t('workflow.validation.inputRequired', { node: label })
@@ -2788,17 +2800,21 @@ function updateNodeData(id: string, patch: Partial<WorkflowAgentNodeEditableData
   if (selectedWorkflowRunId.value) return
   nodes.value = nodes.value.map<WorkflowNode>((node) => {
     if (node.id !== id) return node
+    const agentChanged = typeof patch.agent === 'string' && patch.agent !== node.data.agent
+    const nextAgent = typeof patch.agent === 'string' ? patch.agent : node.data.agent
     const data = {
       ...node.data,
       ...patch,
-      skills: typeof patch.agent === 'string' && patch.agent !== node.data.agent ? [] : patch.skills ?? node.data.skills,
+      ...(agentChanged ? { agentPreset: undefined, agentPresetReady: undefined } : {}),
+      ...(agentChanged && !['claude-code', 'codex', 'pi', 'grok', 'opencode', 'dsh'].includes(nextAgent) ? { agentMode: 'scoped' as const } : {}),
+      skills: agentChanged ? [] : patch.skills ?? node.data.skills,
     }
     return {
       ...node,
       style: patch.images ? expandNodeHeightForImages(node.style, patch.images.length) : node.style,
       data: withRuntimeNodeData({
         ...data,
-        ...(typeof patch.agent === 'string' && patch.agent !== node.data.agent ? normalizeNodeModel(data) : {}),
+        ...(agentChanged ? normalizeNodeModel(data) : {}),
       }),
     }
   })

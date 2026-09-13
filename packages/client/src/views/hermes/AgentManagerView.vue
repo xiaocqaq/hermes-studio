@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, h, onMounted, ref, watch } from 'vue'
+import { getAgentUpdatePolicies, setAgentAutoUpdate, type AgentUpdatePolicyState } from '@/api/coding-agents'
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NTag, useDialog, useMessage } from 'naive-ui'
+import { NAlert, NButton, NDrawer, NDrawerContent, NPopconfirm, NSpin, NSwitch, NTag, useDialog, useMessage } from 'naive-ui'
 import {
   checkCodingAgentUpdate,
   deleteCodingAgent,
@@ -13,11 +14,16 @@ import {
   type CodingAgentUpdateResult,
 } from '@/api/coding-agents'
 import { fetchAgentStatusSnapshot, type AgentStatusSnapshot } from '@/api/agent-status'
+import {
+  decideLegacyWindowsDataMigration,
+  fetchLegacyWindowsDataMigrationStatus,
+} from '@/api/hermes/legacy-data-migration'
 import { fetchRuntimeVersionStatus, type RuntimeVersionStatus } from '@/api/hermes/runtime-versions'
 import HermesDataDirectoryHint from '@/components/hermes/HermesDataDirectoryHint.vue'
 import VersionManagementModal from '@/components/layout/VersionManagementModal.vue'
 import { useAppStore } from '@/stores/hermes/app'
 import { useChatStore } from '@/stores/hermes/chat'
+import { desktopBridge } from '@/utils/desktop-bridge'
 
 const AiHelpChatPanel = defineAsyncComponent(async () => (await import('@/components/hermes/chat/ChatPanel.vue')).default)
 
@@ -63,8 +69,40 @@ const codingAgents: CodingAgentCard[] = [
     command: 'pi',
     packageName: '@earendil-works/pi-coding-agent',
   },
+  {
+    id: 'grok',
+    name: 'Grok',
+    provider: 'xAI',
+    logo: '/coding-agents/grok.svg',
+    command: 'grok',
+    packageName: '@xai-official/grok',
+  },
+  {
+    id: 'opencode',
+    name: 'OpenCode',
+    provider: 'OpenCode',
+    logo: '/coding-agents/opencode.png',
+    command: 'opencode',
+    packageName: 'opencode-ai',
+  },
+  { id: 'dsh', name: 'DeepSeek Harness', provider: 'DeepSeek', logo: '/coding-agents/deepseek.svg', command: 'dsh', packageName: '@deepseek-ai/dsh' },
 ]
 
+const updatePolicies = ref<Record<string, AgentUpdatePolicyState>>({})
+let policyTimer: ReturnType<typeof setInterval> | undefined
+async function refreshPolicies() {
+  try { updatePolicies.value = (await getAgentUpdatePolicies()).agents } catch { /* unavailable to non-admin/old server */ }
+}
+function availableUpdateVersion(id: CodingAgentId): string {
+  const policy = updatePolicies.value[id]
+  if (policy) return ['available','waiting'].includes(policy.status) ? policy.latestVersion : ''
+  return updateInfo.value[id]?.updateAvailable ? updateInfo.value[id]?.latestVersion || '' : ''
+}
+async function toggleAutoUpdate(id: CodingAgentId, enabled: boolean) {
+  try { updatePolicies.value = (await setAgentAutoUpdate(id, enabled)).agents } catch (error) { message.error(String(error)) }
+}
+onMounted(() => { void refreshPolicies(); policyTimer = setInterval(() => void refreshPolicies(), 15000) })
+onUnmounted(() => { if(policyTimer) clearInterval(policyTimer) })
 const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
@@ -83,13 +121,17 @@ const hermesCliDetailsLoading = ref(false)
 const hermesRuntimeStatus = ref<RuntimeVersionStatus | null>(null)
 const aiHelpDrawerVisible = ref(false)
 const aiHelpPrompt = ref('')
-const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
-const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
-const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false })
+const legacyDataMigrationChecked = ref(false)
+const installing = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false, dsh: false })
+const deleting = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false, dsh: false })
+const checkingUpdate = ref<Record<CodingAgentId, boolean>>({ 'claude-code': false, codex: false, pi: false, grok: false, opencode: false, dsh: false })
 const updateInfo = ref<Record<CodingAgentId, CodingAgentUpdateResult | null>>({
   'claude-code': null,
   codex: null,
   pi: null,
+  grok: null,
+  opencode: null,
+  dsh: null,
 })
 
 const hermesStatus = computed(() => agentStatusSnapshot.value?.agents.find(agent => agent.id === 'hermes'))
@@ -266,11 +308,62 @@ async function openHermesCliDetails() {
   }
 }
 
+async function submitLegacyDataMigrationDecision(action: 'migrate' | 'decline'): Promise<boolean> {
+  try {
+    await decideLegacyWindowsDataMigration(action)
+    if (action === 'migrate') {
+      const bridge = desktopBridge()
+      if (!bridge?.restartApp) throw new Error('Desktop restart is unavailable')
+      message.success(t('agentManager.legacyDataMigrationSuccess'))
+      await bridge.restartApp()
+    }
+    return true
+  } catch (error) {
+    message.error(t('agentManager.legacyDataMigrationFailed', { error: errorMessage(error) }))
+    return false
+  }
+}
+
+async function maybePromptLegacyWindowsDataMigration() {
+  const bridge = desktopBridge()
+  if (legacyDataMigrationChecked.value || bridge?.isDesktop !== true || bridge.platform !== 'win32') return
+  legacyDataMigrationChecked.value = true
+
+  try {
+    const status = await fetchLegacyWindowsDataMigrationStatus()
+    if (!status.shouldPrompt) return
+
+    dialog.warning({
+      title: t('agentManager.legacyDataMigrationTitle'),
+      content: () => h('div', { class: 'legacy-data-migration-dialog' }, [
+        h('p', t('agentManager.legacyDataMigrationDescription')),
+        h('dl', [
+          h('dt', t('agentManager.legacyDataMigrationSource')),
+          h('dd', [h('code', status.sourceDirectory)]),
+          h('dt', t('agentManager.legacyDataMigrationTarget')),
+          h('dd', [h('code', status.targetDirectory)]),
+        ]),
+        h('p', { class: 'legacy-data-migration-warning' }, t('agentManager.legacyDataMigrationWarning')),
+      ]),
+      positiveText: t('agentManager.legacyDataMigrationPositive'),
+      negativeText: t('agentManager.legacyDataMigrationNegative'),
+      closable: false,
+      maskClosable: false,
+      closeOnEsc: false,
+      onPositiveClick: () => submitLegacyDataMigrationDecision('migrate'),
+      onNegativeClick: () => submitLegacyDataMigrationDecision('decline'),
+    })
+  } catch (error) {
+    console.warn('[agent-manager] failed to check legacy Windows Hermes data migration', error)
+  }
+}
+
 async function handleInstall(id: CodingAgentId) {
   installing.value[id] = true
   try {
     const result = await installCodingAgent(id)
     tools.value = result.tools
+    if (result.updateState) updatePolicies.value[id] = result.updateState
     if (!result.success) throw new Error(result.message || t('codingAgents.installFailed'))
     updateInfo.value[id] = null
     message.success(t('codingAgents.installSuccess'))
@@ -318,6 +411,7 @@ onMounted(() => {
     void router.replace({ query })
   }
   void loadCachedStatus()
+  void maybePromptLegacyWindowsDataMigration()
 })
 </script>
 
@@ -414,6 +508,14 @@ onMounted(() => {
 
             <div class="agent-actions">
               <NButton
+                v-if="hermesDetected"
+                secondary
+                size="small"
+                @click="router.push({ name: 'hermes.configSettings' })"
+              >
+                {{ t('sidebar.settings') }}
+              </NButton>
+              <NButton
                 v-if="hermesDetected && hermesType === 'CLI'"
                 data-testid="view-hermes-cli-details"
                 secondary
@@ -431,14 +533,6 @@ onMounted(() => {
                 @click="runtimeManagerVisible = true"
               >
                 {{ hermesDetected ? t('agentManager.manageRuntime') : t('codingAgents.installNow') }}
-              </NButton>
-              <NButton
-                v-if="hermesDetected"
-                secondary
-                size="small"
-                @click="router.push({ name: 'hermes.configSettings' })"
-              >
-                {{ t('sidebar.settings') }}
               </NButton>
             </div>
           </section>
@@ -474,6 +568,17 @@ onMounted(() => {
 
               <div class="agent-actions">
                 <NButton
+                  secondary
+                  size="small"
+                  :data-testid="`agent-settings-${agent.id}`"
+                  @click="router.push({
+                    name: 'codingAgent.config',
+                    params: { agentId: agent.id, section: 'settings' },
+                  })"
+                >
+                  {{ t('sidebar.settings') }}
+                </NButton>
+                <NButton
                   v-if="!toolStatus(agent.id)?.installed"
                   type="primary"
                   secondary
@@ -484,17 +589,17 @@ onMounted(() => {
                   {{ t('codingAgents.installNow') }}
                 </NButton>
                 <NButton
-                  v-else-if="updateInfo[agent.id]?.updateAvailable"
+                  v-else-if="availableUpdateVersion(agent.id)"
                   type="primary"
                   secondary
                   size="small"
                   :loading="installing[agent.id]"
                   @click="handleInstall(agent.id)"
                 >
-                  {{ t('agentManager.updateToVersion', { version: updateInfo[agent.id]?.latestVersion }) }}
+                  {{ t('agentManager.updateToVersion', { version: formatVersion(availableUpdateVersion(agent.id)) }) }}
                 </NButton>
                 <NButton
-                  v-if="toolStatus(agent.id)?.installed"
+                  v-if="toolStatus(agent.id)?.installed && !availableUpdateVersion(agent.id)"
                   secondary
                   size="small"
                   :loading="checkingUpdate[agent.id]"
@@ -503,6 +608,7 @@ onMounted(() => {
                 >
                   {{ t('codingAgents.checkUpdate') }}
                 </NButton>
+
                 <NPopconfirm
                   v-if="toolStatus(agent.id)?.installed"
                   @positive-click="handleDelete(agent.id)"
@@ -520,6 +626,11 @@ onMounted(() => {
                   </template>
                   {{ t('agentManager.deleteConfirm', { name: agent.name }) }}
                 </NPopconfirm>
+              </div>
+              <div v-if="toolStatus(agent.id)?.installed && updatePolicies[agent.id]" class="agent-update-policy">
+                <div class="agent-update-policy-row"><span>{{ t('agentAutoUpdate.label') }}</span><NSwitch class="agent-update-switch" size="small" :theme-overrides="{ railHeightSmall: '16px', railWidthSmall: '28px', buttonHeightSmall: '12px', buttonWidthSmall: '12px' }" :disabled="!updatePolicies[agent.id]?.autoUpdateSupported" :value="updatePolicies[agent.id]?.autoUpdate" @update:value="toggleAutoUpdate(agent.id, $event)" /></div>
+
+                <small v-if="updatePolicies[agent.id]?.error" class="agent-update-error">{{ t('codingAgents.checkUpdateFailed') }}</small>
               </div>
             </section>
           </div>
@@ -611,6 +722,35 @@ onMounted(() => {
 
 :global(.agent-ai-help-dialog p) {
   margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog p) {
+  margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog dl) {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+:global(.legacy-data-migration-dialog dt) {
+  color: var(--text-color-2);
+}
+
+:global(.legacy-data-migration-dialog dd) {
+  min-width: 0;
+  margin: 0;
+}
+
+:global(.legacy-data-migration-dialog code) {
+  overflow-wrap: anywhere;
+}
+
+:global(.legacy-data-migration-dialog .legacy-data-migration-warning) {
+  margin-bottom: 0;
+  color: var(--warning-color);
 }
 
 :global(.agent-ai-help-error) {
@@ -783,4 +923,11 @@ onMounted(() => {
   }
 
 }
+</style>
+
+<style scoped>
+.agent-update-policy { min-width: 0; width: 100%; box-sizing: border-box; padding-top: 10px; border-top: 1px solid var(--border-color, #eee); }
+.agent-update-policy-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 12px; }
+.agent-update-policy small { display: block; margin-top: 6px; overflow-wrap: anywhere; }
+.agent-update-error { color: #c44; }
 </style>

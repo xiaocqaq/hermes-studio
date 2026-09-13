@@ -86,11 +86,13 @@ export interface RoomAgent {
     id: string
     roomId: string
     agentId: string
-    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agentMode: 'scoped' | 'global'
     profile: string
     provider: string
     model: string
     apiMode: string
+    agentPreset?: string
     reasoningEffort: string
     name: string
     description: string
@@ -123,11 +125,13 @@ export interface GroupAgentActivity {
 
 export interface RoomAgentInput {
     presetId?: string
-    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agentMode?: 'scoped' | 'global'
     profile: string
     provider?: string
     model?: string
     apiMode?: string
+    agentPreset?: string
     reasoningEffort?: string
     name?: string
     description?: string
@@ -152,11 +156,13 @@ export function groupAgentPresetToRoomAgentInput(preset: GroupAgentPreset): Room
     return {
         presetId: preset.id,
         agent: preset.agent,
+        agentMode: preset.agentMode,
         profile: preset.profile,
         provider: preset.provider,
         model: preset.model,
-        apiMode: preset.agent === 'hermes' ? undefined : preset.apiMode,
+        apiMode: preset.agent === 'hermes' || preset.agentMode === 'global' ? undefined : preset.apiMode,
         reasoningEffort: preset.reasoningEffort,
+        agentPreset: preset.agentPreset,
         name: preset.name,
         description: preset.description,
         avatar: preset.avatar,

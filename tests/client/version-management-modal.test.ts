@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const api = vi.hoisted(() => ({
   activateRuntimeVersion: vi.fn(),
@@ -38,6 +38,7 @@ vi.mock('naive-ui', () => ({
 }))
 
 import VersionManagementModal from '@/components/layout/VersionManagementModal.vue'
+import { useRuntimeRestartPrompt } from '@/composables/useRuntimeRestartPrompt'
 
 function runtimeStatus() {
   return {
@@ -74,7 +75,9 @@ function runtimeStatus() {
 }
 
 describe('VersionManagementModal Runtime storage selector', () => {
+  afterEach(() => vi.useRealTimers())
   beforeEach(() => {
+    useRuntimeRestartPrompt().clearRuntimeRestart()
     for (const mock of Object.values(api)) mock.mockReset()
     selectRuntimeDirectory.mockReset()
     message.success.mockReset()
@@ -92,7 +95,7 @@ describe('VersionManagementModal Runtime storage selector', () => {
 
     const note = wrapper.get('[data-testid="runtime-cli-update-note"]')
     expect(note.text()).toContain('runtimeVersions.cliUpdateDescription')
-    expect(note.text()).toContain('hermes-studio cli update')
+    expect(note.text()).toContain('ekko-studio cli update')
     expect(api.fetchRuntimeVersionStatus).toHaveBeenCalledWith()
   })
 
@@ -253,7 +256,7 @@ describe('VersionManagementModal Runtime storage selector', () => {
     expect(message.success).toHaveBeenCalledWith('runtimeVersions.runtimeDirectorySaved')
   })
 
-  it('restarts standalone Web UI after selecting an installed Runtime', async () => {
+  it('requests global restart confirmation after selecting an installed Runtime', async () => {
     const status = runtimeStatus()
     status.hermes.remoteVersions = ['0.20.4']
     status.hermes.installed = [{
@@ -274,7 +277,34 @@ describe('VersionManagementModal Runtime storage selector', () => {
     await flushPromises()
 
     expect(api.activateRuntimeVersion).toHaveBeenCalledWith('0.20.4')
-    expect(api.restartWebUiAfterRuntimeChange).toHaveBeenCalledTimes(1)
+    expect(api.restartWebUiAfterRuntimeChange).not.toHaveBeenCalled()
+    expect(useRuntimeRestartPrompt().pendingRuntimeRestart.value?.version).toBe('0.20.4')
     wrapper.unmount()
   })
+
+  it('notifies the global monitor when starting a Runtime download before the drawer closes', async () => {
+    vi.useFakeTimers()
+    const status = {
+      ...runtimeStatus(),
+      hermes: { ...runtimeStatus().hermes, remoteVersions: ['0.20.6'] },
+    }
+    api.fetchRuntimeVersionStatus.mockResolvedValue(status)
+    api.downloadRuntimeVersion.mockResolvedValue({ success: true, job: {
+      id: 'new-runtime-job', kind: 'runtime', version: '0.20.6', status: 'queued',
+      source: 'github', stage: 'queued', message: '', error: '', createdAt: '', updatedAt: '',
+    } })
+    const monitor = useRuntimeRestartPrompt()
+    const wrapper = mount(VersionManagementModal, { props: { show: false } })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const beforeDownload = monitor.runtimeDownloadCheckRevision.value
+    const download = wrapper.findAll('button').find(button => button.text() === 'runtimeVersions.downloadGithub')!
+    await download.trigger('click')
+    await flushPromises()
+    expect(api.downloadRuntimeVersion).toHaveBeenCalledWith('0.20.6', 'github')
+    expect(monitor.runtimeDownloadCheckRevision.value).toBeGreaterThan(beforeDownload)
+    await wrapper.setProps({ show: false })
+    wrapper.unmount()
+  })
+
 })

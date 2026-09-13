@@ -1,3 +1,5 @@
+import { bindLegacyAppEvents } from '../services/webhooks/legacy-app-events'
+import { publishGroupMessage, registerGroupEventAccess } from '../services/webhooks/app-events'
 import { Server, Socket, Namespace } from 'socket.io'
 import type { Server as HttpServer } from 'http'
 import { mkdirSync } from 'fs'
@@ -228,11 +230,13 @@ interface RoomAgent {
     id: string
     roomId: string
     agentId: string
-    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agentMode: 'scoped' | 'global'
     profile: string
     provider: string
     model: string
     apiMode: string
+    agentPreset?: string
     reasoningEffort: string
     name: string
     description: string
@@ -256,10 +260,12 @@ interface GroupAgentActivity {
 }
 
 interface RoomAgentMetadata {
-    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi'
+    agent?: 'hermes' | 'ekko' | 'codex' | 'claude' | 'pi' | 'grok' | 'opencode' | 'dsh'
+    agentMode?: 'scoped' | 'global'
     provider?: string
     model?: string
     apiMode?: string
+    agentPreset?: string
     reasoningEffort?: string
     avatar?: string
     executorType?: 'server' | 'remote'
@@ -372,11 +378,13 @@ const ROOM_AGENT_SELECT_COLUMNS = [
     'roomId',
     'agentId',
     'agent',
+    'agentMode',
     'profile',
     'provider',
     'model',
     'apiMode',
     'reasoningEffort',
+    'agentPreset',
     'name',
     'description',
     'avatar',
@@ -2531,10 +2539,12 @@ class ChatStorage {
         this.assertParticipantNameAvailable(roomId, name)
         const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
         const agent = metadata.agent || 'hermes'
-        const provider = String(metadata.provider || '').trim()
-        const model = String(metadata.model || '').trim()
-        const apiMode = agent === 'hermes' ? '' : String(metadata.apiMode || '').trim()
-        const reasoningEffort = String(metadata.reasoningEffort || '').trim()
+        const agentMode = metadata.agentMode === 'global' ? 'global' : 'scoped'
+        const provider = agentMode === 'global' ? '' : String(metadata.provider || '').trim()
+        const model = agentMode === 'global' ? '' : String(metadata.model || '').trim()
+        const apiMode = agent === 'hermes' || agentMode === 'global' ? '' : String(metadata.apiMode || '').trim()
+        const reasoningEffort = agentMode === 'global' ? '' : String(metadata.reasoningEffort || '').trim()
+        const agentPreset = typeof metadata.agentPreset === 'string' ? metadata.agentPreset.trim() : ''
         const avatar = String(metadata.avatar || '').trim()
         const executorType = metadata.executorType === 'remote' ? 'remote' : 'server'
         const ownerMemberId = String(metadata.ownerMemberId || '').trim()
@@ -2542,18 +2552,18 @@ class ChatStorage {
         const remoteOrigin = String(metadata.remoteOrigin || '').trim()
         this.db()?.prepare(
             `INSERT INTO gc_room_agents (
-                id, roomId, agentId, agent, profile, provider, model, apiMode,
-                reasoningEffort, name, description, avatar, invited,
+                id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+                reasoningEffort, agentPreset, name, description, avatar, invited,
                 executorType, ownerMemberId, connectorId, remoteOrigin
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
-            id, roomId, agentId, agent, profile, provider, model, apiMode,
-            reasoningEffort, name, description, avatar, invited,
+            id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+            reasoningEffort, agentPreset, name, description, avatar, invited,
             executorType, ownerMemberId, connectorId, remoteOrigin,
         )
         return {
-            id, roomId, agentId, agent, profile, provider, model, apiMode,
-            reasoningEffort, name, description, avatar, invited,
+            id, roomId, agentId, agent, agentMode, profile, provider, model, apiMode,
+            reasoningEffort, agentPreset, name, description, avatar, invited,
             executorType, ownerMemberId, connectorId, remoteOrigin,
         }
     }
@@ -2581,11 +2591,13 @@ class ChatStorage {
             id: String(target.id || ''),
             agentId: String(target.agentId || ''),
             agent: String(target.agent || ''),
+            agentMode: String(target.agentMode || 'scoped'),
             profile: String(target.profile || ''),
             provider: String(target.provider || ''),
             model: String(target.model || ''),
             apiMode: String(target.apiMode || ''),
             reasoningEffort: String(target.reasoningEffort || ''),
+            agentPreset: String(target.agentPreset || ''),
             name: String(target.name || ''),
             description: String(target.description || ''),
             executorType: String(target.executorType || ''),
@@ -2607,16 +2619,18 @@ class ChatStorage {
         if (!existing) return null
         this.assertParticipantNameAvailable(roomId, name, { excludeAgentRef: existing.id })
         const agent = metadata.agent || 'hermes'
-        const provider = String(metadata.provider || '').trim()
-        const model = String(metadata.model || '').trim()
-        const apiMode = agent === 'hermes' ? '' : String(metadata.apiMode || '').trim()
-        const reasoningEffort = String(metadata.reasoningEffort || '').trim()
+        const agentMode = metadata.agentMode === 'global' ? 'global' : 'scoped'
+        const provider = agentMode === 'global' ? '' : String(metadata.provider || '').trim()
+        const model = agentMode === 'global' ? '' : String(metadata.model || '').trim()
+        const apiMode = agent === 'hermes' || agentMode === 'global' ? '' : String(metadata.apiMode || '').trim()
+        const reasoningEffort = agentMode === 'global' ? '' : String(metadata.reasoningEffort || '').trim()
+        const agentPreset = typeof metadata.agentPreset === 'string' ? metadata.agentPreset.trim() : ''
         const avatar = String(metadata.avatar || '').trim()
         this.db()?.prepare(
             `UPDATE gc_room_agents
-             SET agent = ?, profile = ?, provider = ?, model = ?, apiMode = ?, reasoningEffort = ?, name = ?, description = ?, avatar = ?
+             SET agent = ?, agentMode = ?, profile = ?, provider = ?, model = ?, apiMode = ?, reasoningEffort = ?, agentPreset = ?, name = ?, description = ?, avatar = ?
              WHERE roomId = ? AND removedAt = 0 AND (id = ? OR agentId = ?)`
-        ).run(agent, profile, provider, model, apiMode, reasoningEffort, name, description, avatar, roomId, agentRef, agentRef)
+        ).run(agent, agentMode, profile, provider, model, apiMode, reasoningEffort, agentPreset, name, description, avatar, roomId, agentRef, agentRef)
         return this.getRoomAgent(roomId, agentRef)
     }
 
@@ -3252,6 +3266,10 @@ export class GroupChatServer {
         })
         servers.slice(1).forEach((httpServer) => this.io.attach(httpServer))
         this.nsp = this.io.of('/group-chat')
+        const removeGroupEventAccess = registerGroupEventAccess({ canReceive: (user, roomId) => this.canSocketObserveRoom({
+            id: '', data: { authUser: user },
+        } as unknown as Socket, roomId) })
+        for (const server of servers) server.once('close', removeGroupEventAccess)
         this.nsp.use(this.authMiddleware.bind(this))
         this.nsp.on('connection', this.onConnection.bind(this))
 
@@ -3314,6 +3332,18 @@ export class GroupChatServer {
         return typeof this.storage.listQueuedExecutionItems === 'function'
             ? this.storage.listQueuedExecutionItems(roomId)
             : []
+    }
+
+    private readonly notifiedGroupMessages = new Set<string>()
+
+    private notifyGroupReply(roomId: string, message: ChatMessage): void {
+        const room = this.storage.getRoom(roomId)
+        if (!room) return
+        // Publish persisted message facts; the App adapter chooses which replies notify.
+        if (this.notifiedGroupMessages.has(message.id)) return
+        this.notifiedGroupMessages.add(message.id)
+        if (this.notifiedGroupMessages.size > 2000) this.notifiedGroupMessages.delete(this.notifiedGroupMessages.values().next().value!)
+        publishGroupMessage(room, message as unknown as Record<string, unknown>, this.storage.getRoomAgents(roomId))
     }
 
     private broadcastExecutionQueue(roomId: string): void {
@@ -3703,10 +3733,12 @@ export class GroupChatServer {
             for (const agent of this.storage.getRoomAgents(roomId) || []) {
                 ids.add(groupBridgeSessionId(roomId, agent.profile, agent.name, String(room?.sessionSeed || '0'), {
                     agent: agent.agent,
+                    agentMode: agent.agentMode,
                     provider: agent.provider,
                     model: agent.model,
                     apiMode: agent.apiMode,
                     reasoningEffort: agent.reasoningEffort,
+                    agentPreset: agent.agentPreset,
                 }))
             }
         }
@@ -3813,11 +3845,13 @@ export class GroupChatServer {
                     const client = await this.agentClients.createAgent({
                         agentId: agent.agentId,
                         agent: agent.agent,
+                        agentMode: agent.agentMode,
                         profile: agent.profile,
                         provider: agent.provider,
                         model: agent.model,
                         apiMode: agent.apiMode,
                         reasoningEffort: agent.reasoningEffort,
+                        agentPreset: agent.agentPreset,
                         name: agent.name,
                         description: agent.description,
                         invited: agent.invited,
@@ -3872,6 +3906,7 @@ export class GroupChatServer {
     // ─── Connection ─────────────────────────────────────────────
 
     private onConnection(socket: Socket): void {
+        bindLegacyAppEvents(socket, 'group', event => Boolean(event.subject.room_id && this.canSocketObserveRoom(socket, event.subject.room_id)))
         const auth = socket.handshake.auth as { userId?: string; name?: string; description?: string; source?: string; agentSocketSecret?: string; authUserId?: number }
         const requestedSource = auth.source === 'agent' && auth.agentSocketSecret === GROUP_CHAT_AGENT_SOCKET_SECRET ? 'agent' : 'human'
         const authenticatedUser = socket.data.authUser as AuthenticatedUser | undefined
@@ -4166,10 +4201,12 @@ export class GroupChatServer {
         if (!room || !roomAgent) return false
         const expected = groupBridgeSessionId(roomId, roomAgent.profile, roomAgent.name, String(room.sessionSeed || '0'), {
             agent: roomAgent.agent,
+            agentMode: roomAgent.agentMode,
             provider: roomAgent.provider,
             model: roomAgent.model,
             apiMode: roomAgent.apiMode,
             reasoningEffort: roomAgent.reasoningEffort,
+            agentPreset: roomAgent.agentPreset,
         })
         return sessionId === expected && !this.isRoomAgentSessionFenced(roomId, sessionId)
     }
@@ -4337,6 +4374,7 @@ export class GroupChatServer {
             historyTruncated,
             typingUsers: this.getTypingUsers(roomId),
             contextStatuses: this.getContextStatuses(roomId),
+            roomSummary: this.roomSummaryService.getState(roomId),
             executionQueue: this.executionQueueSnapshot(roomId),
             pendingApprovals: this.pendingApprovalSnapshots(roomId, socket),
             pendingClarifies: this.canSocketManageRoom(socket, roomId) ? this.pendingClarifySnapshots(roomId) : [],
@@ -4599,6 +4637,7 @@ export class GroupChatServer {
         const totalTokens = saved.totalTokens
 
         this.nsp.to(roomId).emit('message', buildOutboundGroupMessage(savedMsg))
+        this.notifyGroupReply(roomId, savedMsg)
         this.nsp.to(roomId).emit('room_updated', { roomId, totalTokens })
         ack?.({ id: savedMsg.id })
 

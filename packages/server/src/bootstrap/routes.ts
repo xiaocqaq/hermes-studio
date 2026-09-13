@@ -10,6 +10,7 @@ import { apiDocsRoutes } from '../modules/studio'
 import { healthRoutes } from './health'
 import { updateRoutes } from './update'
 import { themeRoutes } from '../modules/studio/routes/theme'
+import { announcementRoutes } from '../modules/studio/routes/announcements'
 import { appConnectionRoutes, appRelayRoutes } from './app-relay'
 import { devicePublicRoutes, deviceRoutes } from './devices'
 import { socialMessageRoutes } from '../modules/studio/routes/social-messages'
@@ -59,6 +60,7 @@ import { performanceMonitorRoutes } from '../modules/studio/routes/performance-m
 import { journeyRoutes } from '../modules/hermes/routes/journey'
 import { mcpRoutes } from '../modules/hermes/routes/mcp'
 import { runtimeVersionRoutes } from '../modules/hermes/routes/runtime-versions'
+import { legacyDataMigrationRoutes } from '../modules/hermes/routes/legacy-data-migration'
 import { agentStatusRoutes } from '../modules/studio/routes/agent-status'
 import { writeGateRoutes } from '../modules/hermes/routes/write-gate'
 import { ekkoMemoryRoutes } from '../modules/ekko/routes/memory'
@@ -103,6 +105,7 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
   app.use(codingAgentRoutes.routes())
   app.use(agentStatusRoutes.routes())
   app.use(themeRoutes.routes())
+  app.use(announcementRoutes.routes())
   app.use(appRelayRoutes.routes())
   app.use(socialMessageRoutes.routes())
   app.use(sessionRoutes.routes())
@@ -143,6 +146,7 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
   app.use(journeyRoutes.routes())
   app.use(mcpRoutes.routes())                   // MCP management
   app.use(runtimeVersionRoutes.routes())         // Runtime and version management
+  app.use(legacyDataMigrationRoutes.routes())    // One-time legacy Windows Hermes data migration
   app.use(writeGateRoutes.routes())              // Hermes Agent write approval review
   app.use(petdexRoutes.routes())
   app.use(petRoutes.routes())

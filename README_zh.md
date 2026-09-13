@@ -1,32 +1,25 @@
 <p align="center">
-  <strong>Hermes Studio</strong>
+  <strong>Ekko Studio</strong>
   <a href="./README.md">English</a>
 </p>
 
 <p align="center">
-  面向 <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>、Ekko、Claude Code、Codex 和 Pi 的<br/>
-  多 Agent 桌面应用、本地运行时和 Web 控制台。<br/>
-  在一个本地优先的工作区中完成聊天、群聊、工作流、编码任务、语音、文件和设备管理。
+  本地优先的 AI 工作区，支持多 Agent 聊天、编码和可视化工作流。<br/>
+  提供桌面应用和可自托管的 Web 控制台，支持<br/>
+  <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>、Ekko Agent、Claude Code、Codex、Pi、Grok、OpenCode 和 DeepSeek Harness（DSH）。<br/>
+  在同一个工作区中管理对话、群组协作、语音、文件和设备。
 </p>
 
 <p align="center">
-  <a href="https://github.com/EKKOLearnAI/hermes-studio/releases/latest">下载 Hermes Studio 桌面版</a>
+  <a href="https://github.com/EKKOLearnAI/hermes-studio/releases/latest">下载 Ekko Studio 桌面版</a>
   ·
-  <a href="https://hermes-studio.ai/#/docs/getting-started">使用文档</a>
+  <a href="https://ekkostudio.xyz/#/docs/getting-started">使用文档</a>
   ·
   <code>npm install -g hermes-web-ui && hermes-web-ui start</code>
 </p>
 
 <p align="center">
-  <img src="https://github.com/EKKOLearnAI/hermes-studio/blob/main/packages/client/src/assets/image.gif" alt="Hermes Studio 演示" width="680"/>
-</p>
-
-<p align="center">
-  <strong>移动端</strong>
-</p>
-
-<p align="center">
-  <video src="https://github.com/EKKOLearnAI/hermes-studio/blob/main/packages/client/src/assets/video.mp4?raw=true" width="360" controls></video>
+  <img src="./docs/screenshots/overview/workspace.png" alt="Ekko Studio 工作区与示例对话" width="960"/>
 </p>
 
 <p align="center">
@@ -35,27 +28,49 @@
   <a href="https://github.com/EKKOLearnAI/hermes-studio/stargazers"><img src="https://img.shields.io/github/stars/EKKOLearnAI/hermes-studio?style=flat-square" alt="Star"/></a>
 </p>
 
+Ekko Studio 原名 Hermes Studio / Hermes Web UI。GitHub 仓库仍为
+`EKKOLearnAI/hermes-studio`，npm 包名和服务端 CLI 仍为 `hermes-web-ui`；
+克隆和安装时请继续使用这些名称。
+
+## 界面预览
+
+以下为 Ekko Studio **v0.7.18** 的界面截图（2026-09-10）。聊天和工作流使用演示数据。
+
+| 可视化工作流 | Agent 管理 |
+| --- | --- |
+| [![可视化工作流：研究、编码与审核](./docs/screenshots/overview/workflow.png)](./docs/screenshots/overview/workflow.png) | [![统一管理七种 Agent 运行时](./docs/screenshots/overview/agent-manager.png)](./docs/screenshots/overview/agent-manager.png) |
+| 连接多个 Agent 节点，并设置人工审批。 | 在同一界面管理 Agent 安装、设置和更新。 |
+
+<details>
+<summary>查看技能管理界面</summary>
+
+浏览已安装的技能、阅读使用说明，并按需启用。
+
+![Ekko Agent 技能管理与 GitHub 技能说明](./docs/screenshots/overview/skills.png)
+
+</details>
+
 ## 核心能力
 
-| 模块 | Hermes Studio 能做什么 |
+| 模块 | Ekko Studio 能做什么 |
 |---|---|
-| 多 Agent 运行时 | 运行 Hermes、Ekko、Claude Code、Codex 和 Pi，支持流式回复、工具调用轨迹、生成文件预览、持久化会话和桌面独立聊天窗口。 |
+| 多 Agent 运行时 | 运行 Hermes、Ekko、Claude Code、Codex、Pi、Grok、OpenCode 和 DeepSeek Harness（DSH），支持流式回复、工具调用轨迹、生成文件预览、持久化会话和桌面独立聊天窗口。 |
 | Studio 工作区 | 为不同 Agent 运行时提供统一的单聊、群聊、Global Agent、工作流、文件、语音、媒体、设备、主题、日志、用量和 App 连接能力。 |
 | Agent 控制面 | 将 Hermes 的 Profile、Provider、模型、记忆、技能、插件、任务、Kanban、渠道和运行时管理保留在对应的 Agent 模块内。 |
-| 自动化 | 构建可执行的可视化工作流，通过定时任务、审批节点、群聊房间、平台渠道和 MCP Server 连接五种运行时。 |
+| 自动化 | 构建可执行的可视化工作流，通过定时任务、审批节点、群聊房间、平台渠道和 MCP Server 连接受支持的 Agent 运行时。 |
 | 工作区工具 | 提供文件浏览器、Web 终端、桌面 Agent 浏览器、语音输入输出、Coding Agent、设备发现、学习轨迹和性能视图。 |
 | 分发形态 | 支持 Windows/macOS/Linux 桌面应用、npm CLI 包和 Docker 镜像。 |
 
 ## Agent 与平台边界
 
-Hermes Studio 是所有 Agent 共用的产品平台，不是第六种 Agent。当前五种
-具体运行时归入三个 Agent Family：
+Ekko Studio 为受支持的 Agent 运行时提供统一工作区，
+这些运行时归入三个 Agent Family：
 
 | Agent Family | 运行时 | 负责的能力 |
 |---|---|---|
 | Hermes | Hermes | Profile、Provider、模型、技能、插件、记忆、任务、Kanban、渠道、MCP、终端和 Hermes Runtime 集成。 |
 | Ekko | Ekko | Ekko 执行、审批、澄清、记忆、MCP 和 Provider Runtime。 |
-| Coding | Claude Code、Codex、Pi | Coding Agent 的安装、配置、代理、会话和进程执行。 |
+| Coding | Claude Code、Codex、Pi、Grok、OpenCode、DSH | Coding Agent 的安装、配置、代理、会话和进程执行。 |
 
 Studio 负责三个 Family 共用的能力：单聊、群聊、Global Agent 编排、工作流、
 Webhook、会话、文件与上传、TTS/STT、媒体、宠物、主题、设备、网络、日志、
@@ -67,7 +82,7 @@ Hermes 控制面 API 使用 `/api/hermes/*`。已经发布的旧版移动 App �
 
 ### AI 聊天
 
-- 聊天前端通过 Socket.IO `/chat-run` 实时流式更新；Studio 通过运行时适配器将任务分发给 Hermes、Ekko、Claude Code、Codex 或 Pi
+- 聊天前端通过 Socket.IO `/chat-run` 实时流式更新；Studio 通过运行时适配器将任务分发给 Hermes、Ekko、Claude Code、Codex、Pi、Grok、OpenCode 或 DSH
 - 多会话管理 — 创建、重命名、删除、切换会话
 - **自建会话数据库** — Studio 会话使用本地 SQLite；Hermes state.db 仅作为只读来源用于 Hermes 历史 API
 - 按来源分组会话（Telegram、Discord、Slack 等），可折叠手风琴面板
@@ -126,7 +141,7 @@ Hermes 控制面 API 使用 `/api/hermes/*`。已经发布的旧版移动 App �
 
 ### 可视化工作流
 
-- 基于 Vue Flow 的画布，支持 Hermes、Ekko、Claude Code、Codex、Pi 节点以及文件/图片附件
+- 基于 Vue Flow 的画布，支持 Hermes、Ekko、Claude Code、Codex、Pi、Grok、OpenCode、DSH 节点以及文件/图片附件
 - 支持有向连线、结构化条件、成功/失败路由、循环和审批门
 - 工作流定义可导入/导出，并支持按 Profile 管理工作区
 - 支持运行预算、截止时间、停止、重跑和持久化执行历史
@@ -171,10 +186,19 @@ Hermes 控制面 API 使用 `/api/hermes/*`。已经发布的旧版移动 App �
 
 ### Coding Agents
 
-- 在仪表盘中安装、配置、启动和监控 Claude Code、Codex 与 Pi
+- 在仪表盘中安装、配置、启动和监控 Claude Code、Codex、Pi、Grok、OpenCode 与 DeepSeek Harness（DSH）
 - 内置 Coding Agent 终端、会话历史、工作区选择、图片输入和文件 Diff
 - 提供独立代理路由和 API 模式，适配不同 Provider/模型
 - 支持桌面独立聊天窗口，并持久化输出和 reasoning 元数据
+
+#### DeepSeek Harness（DSH）
+
+- 支持单聊、群聊和工作流节点，可使用 Studio 选择的 Provider/模型，也可使用 DSH 原生全局配置。
+- 新建会话、添加群聊成员或配置工作流节点时可选择 Agent 预设，恢复会话时保留原有选择。
+- 复用原生 `web` profile 的插件。**插件配置**嵌入插件自带的设置界面并跟随黑白主题，**插件列表**管理已安装的包；Agent 预设使用独立的 Studio 管理页。
+- 管理 DSH 设置、指令、MCP 和私有技能。共享 `~/.agents/skills` 在所有 Coding Agent 页面中仅展示，禁止编辑和删除。
+
+通过 Agent 管理器，在运行 Studio 后端的机器上安装 DSH。安装原生插件还需要该机器的 PATH 中有 `pnpm`。配置方式、Profile 复用和兼容性说明见 [DSH 接入文档](docs/dsh-management.md)。
 
 ### 桌面 Agent 浏览器
 
@@ -204,7 +228,7 @@ Hermes 控制面 API 使用 `/api/hermes/*`。已经发布的旧版移动 App �
 ### 管理与运行时
 
 - 设备和局域网 Peer 页面，用于本地网络发现和 Peer 工具能力
-- MCP 管理器，用于托管的 `hermes-studio` Server、Profile 自动注入和 `api` / `browser` / `devices` / `use` 工具集
+- MCP 管理器，用于托管的 `ekko-studio-*` Server、Profile 自动注入和 `api` / `browser` / `devices` / `use` 工具集
 - Runtime Version 和 Version Preview 工具，用于隔离测试新版本
 - 面向超级管理员的性能监控视图
 
@@ -264,7 +288,7 @@ hermes-web-ui reset-default-login
 - 内置 Studio 运行时，并自动启动本地服务
 - 桌面自动更新优先使用 Cloudflare 下载端点获取更新元数据和安装包
 - 如果 Cloudflare 更新源不可用，会回退到 GitHub Releases `latest` 资源
-- Windows 升级时会先尝试关闭已有 Hermes Studio 进程，再替换文件
+- Windows 升级时会先尝试关闭已有 Ekko Studio 进程，再替换文件
 
 ---
 
@@ -273,7 +297,7 @@ hermes-web-ui reset-default-login
 ### 桌面应用（推荐）
 
 从 [GitHub Releases](https://github.com/EKKOLearnAI/hermes-studio/releases/latest)
-下载最新的 **Hermes Studio** 桌面安装包。
+下载最新的 **Ekko Studio** 桌面安装包。
 
 桌面版会发布 macOS、Windows 和 Linux 构建；适用时会区分不同 CPU 架构。
 桌面应用内置 Studio 运行时；在 Windows、macOS 和 Linux 上，Hermes Agent 数据统一保存到 `~/.hermes`。
@@ -286,14 +310,16 @@ hermes-web-ui reset-default-login
 
 | 命令 | 说明 |
 |---|---|
-| `hermes-studio` | 打开 Hermes Studio 桌面应用 |
-| `hermes-studio cli ...` | 运行内置 Hermes Agent CLI |
-| `hermes-studio web ...` | 运行内置 `hermes-web-ui` 命令 |
-| `hermes-studio -h` | 显示 wrapper 帮助 |
-| `hermes-studio-mcp [api\|browser\|devices\|use]` | 运行指定的受管 Studio MCP 工具集 |
+| `ekko-studio` | 打开 Ekko Studio 桌面应用 |
+| `ekko-studio cli ...` | 运行内置 Hermes Agent CLI |
+| `ekko-studio web ...` | 运行内置 `hermes-web-ui` 命令 |
+| `ekko-studio -h` | 显示 wrapper 帮助 |
+| `ekko-studio-mcp [api\|browser\|devices\|use]` | 运行指定的受管 Studio MCP 工具集 |
 
-使用 `hermes-studio cli -h` 查看 Hermes Agent CLI 帮助，使用
-`hermes-studio web -h` 查看服务端 CLI 帮助。`hermes-studio-mcp` 默认暴露
+桌面命令统一为 `ekko-studio`；安装新命令时会移除旧的受管 `hermes-studio` 命令，不保留兼容别名。
+
+使用 `ekko-studio cli -h` 查看 Hermes Agent CLI 帮助，使用
+`ekko-studio web -h` 查看服务端 CLI 帮助。`ekko-studio-mcp` 默认暴露
 `api` 工具集；按任务选择 `browser`、`devices` 或 `use`，可以缩小 MCP 暴露面。
 
 桌面自动更新会优先读取 `https://download.ekkolearnai.com/latest`。
@@ -341,7 +367,7 @@ Studio 启动后端聊天能力时，会优先使用包含 `run_agent.py` 的源
 
 ## Studio 环境变量
 
-这些变量用于配置 Hermes Studio、本地 Hermes Runtime 集成以及开发/预览辅助能力。Provider API Key 和 Hermes Agent 相关设置通常仍通过 Hermes Profile 管理；这里列出的变量是进程级覆盖项。
+这些变量用于配置 Ekko Studio、本地 Hermes Runtime 集成以及开发/预览辅助能力。Provider API Key 和 Hermes Agent 相关设置通常仍通过 Hermes Profile 管理；这里列出的变量是进程级覆盖项。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -352,7 +378,7 @@ Studio 启动后端聊天能力时，会优先使用包含 `run_agent.py` 的源
 | `HERMES_APP_ENTITLEMENT_PUBLIC_KEY` | 内置 | 可选的 RS256 App 签名 PEM 公钥覆盖。签名 issuer 为 `hermes-studio-server`，audience 为 `ekko-studio`。 |
 | `HERMES_WEB_UI_HOME` | `~/.hermes-web-ui` | Studio 数据目录，用于认证 Token、登录凭据、日志、数据库和默认上传目录。兼容支持 `HERMES_WEBUI_STATE_DIR` 作为别名。 |
 | `HERMES_WEBUI_STATE_DIR` | 未设置 | `HERMES_WEB_UI_HOME` 的兼容别名。 |
-| `HERMES_WEB_UI_DISABLE_MCP_AUTOINJECT` | 未设置 | 关闭启动时向 Hermes profile 配置自动注入托管的 `hermes-studio` MCP server。 |
+| `HERMES_WEB_UI_DISABLE_MCP_AUTOINJECT` | 未设置 | 关闭启动时向 Hermes profile 配置自动注入托管的 `ekko-studio-*` MCP server。 |
 | `HERMES_WEB_UI_ALLOW_TRANSIENT_MCP_AUTOINJECT` | 未设置 | 当 `HERMES_WEB_UI_HOME` 位于临时目录（例如 Version Preview runtime）时，仍允许托管 MCP 自动注入。 |
 | `UPLOAD_DIR` | `$HERMES_WEB_UI_HOME/upload` | 覆盖上传根目录。文件会保存在按 Profile 隔离的子目录下。 |
 | `CORS_ORIGINS` | 仅同 host | HTTP、Socket.IO、WebSocket 跨源 allowlist，支持逗号或空格分隔。只有明确需要旧版 wildcard CORS 时才设置为 `*`。 |
@@ -386,8 +412,8 @@ Studio 启动后端聊天能力时，会优先使用包含 `run_agent.py` 的源
 | `HERMES_BRIDGE_TOOLSETS` | profile/默认值 | bridge 运行时的 toolset 覆盖。 |
 | `HERMES_BRIDGE_MAX_TURNS` | profile/默认值 | bridge 运行时的最大轮数覆盖。 |
 | `HERMES_BRIDGE_SUPPRESS_PLATFORM_HINT` | `cli` | 控制传给 Hermes Agent 的 bridge platform hint suppression。 |
-| `HERMES_OPENROUTER_APP_REFERER` | `https://hermes-studio.ai` | bridge 运行发送给 OpenRouter 的 attribution referer。 |
-| `HERMES_OPENROUTER_APP_TITLE` | `Hermes Studio` | Bridge 运行发送给 OpenRouter 的 Attribution Title。 |
+| `HERMES_OPENROUTER_APP_REFERER` | `https://ekkostudio.xyz` | bridge 运行发送给 OpenRouter 的 attribution referer。 |
+| `HERMES_OPENROUTER_APP_TITLE` | `Ekko Studio` | Bridge 运行发送给 OpenRouter 的 Attribution Title。 |
 | `HERMES_OPENROUTER_APP_CATEGORIES` | `cli-agent,personal-agent` | bridge 运行发送给 OpenRouter 的 attribution categories。 |
 | `HERMES_WEB_UI_MANAGED_GATEWAY` | 默认开启 | 控制 Studio 托管 Hermes Gateway 进程；设为 `0`、`false`、`no` 或 `off` 时改用 `hermes gateway start`。 |
 | `HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART` | 未设置 | 跳过启动时的 gateway 检查/自动启动；dashboard-only 部署中如果由其它服务管理 Hermes gateway，可设为 `1`、`true`、`yes` 或 `on`。 |
@@ -416,7 +442,7 @@ Studio 启动后端聊天能力时，会优先使用包含 `run_agent.py` 的源
 | `hermes-web-ui update` / `upgrade` | 更新到最新版本并重启 |
 | `hermes-web-ui version` / `-v` | 显示版本号 |
 | `hermes-web-ui -h` | 显示帮助信息 |
-| `hermes-web-ui-mcp [api\|browser\|devices\|use]` | 运行一个受管 Studio MCP 工具集（等同于 `hermes-studio-mcp`） |
+| `hermes-web-ui-mcp [api\|browser\|devices\|use]` | 运行一个受管 Studio MCP 工具集（等同于 `ekko-studio-mcp`） |
 
 如不希望自动打开浏览器，可在 `start` 或 `client` 后添加 `--no-open`。
 
@@ -468,7 +494,7 @@ Koa Bootstrap（仅负责组装）
           ├─ Hermes Family ─ Profile、模型、技能、记忆、任务、
           │                  Kanban、渠道、终端、Hermes Bridge
           ├─ Ekko Family ─── Ekko Runtime 与 Agent 自有服务
-          └─ Coding Family ─ Claude Code、Codex、Pi 适配器
+          └─ Coding Family ─ Claude Code、Codex、Pi、Grok、OpenCode、DSH 适配器
 ```
 
 服务端按业务归属组织在
@@ -492,5 +518,7 @@ Studio 状态与 Hermes Agent 状态彼此独立。Studio 默认使用
 
 [BSL-1.1](./LICENSE)
 
-该许可证覆盖 Hermes Studio、`hermes-web-ui` npm 包和 CLI、桌面应用、
+该许可证覆盖 Ekko Studio、`hermes-web-ui` npm 包和 CLI、桌面应用、
 固件、发布产物、文档以及本仓库内的关联文件。
+
+MCP 主入口为 `bin/ekko-studio-mcp.mjs`，工具名统一使用 `ekko_studio_*` 前缀。旧的 `hermes-studio-mcp` / `hermes-web-ui-mcp` 命令及 `hermes_studio_*` 调用继续兼容。重启 MCP 客户端后可发现新工具名；Studio 会将托管服务配置迁移为 `ekko-studio-api`、`ekko-studio-browser`、`ekko-studio-devices` 和 `ekko-studio-use`。

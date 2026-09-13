@@ -160,6 +160,30 @@ describe('MessageList session scroll position', () => {
     expect(wrapper.getComponent({ name: 'VirtualMessageList' }).props('virtualized')).toBe(false)
   })
 
+  it('shows Ekko while the session is pending, then displays the loaded Agent', async () => {
+    const chatStore = useChatStore()
+    chatStore.activeSessionId = 'pending-session'
+    chatStore.activeSession = null
+    const wrapper = mount(MessageList, { global: { stubs: { Transition: false } } })
+    await flushSessionScroll()
+
+    expect(wrapper.get('.empty-logo').attributes('src')).toBe('/coding-agents/ekko-agent.png')
+    expect(wrapper.get('.empty-logo').attributes('alt')).toBe('Ekko')
+    expect(wrapper.get('.empty-state p').text()).toBe('chat.emptyStateAgent')
+
+    chatStore.activeSession = {
+      ...makeSession('pending-session'),
+      source: 'coding_agent',
+      agent: 'codex',
+      codingAgentId: 'codex',
+      messages: [],
+    }
+    await flushSessionScroll()
+    expect(wrapper.get('.empty-logo').attributes('src')).toBe('/coding-agents/codex-openai.png')
+    expect(wrapper.get('.empty-logo').attributes('alt')).toBe('Codex')
+    wrapper.unmount()
+  })
+
   it.each([
     {
       runtime: 'Hermes',
@@ -197,6 +221,8 @@ describe('MessageList session scroll position', () => {
     ['Claude', { source: 'coding_agent', agent: 'claude', codingAgentId: 'claude-code' }, '/coding-agents/claude-code.svg'],
     ['Codex', { source: 'coding_agent', agent: 'codex', codingAgentId: 'codex' }, '/coding-agents/codex-openai.png'],
     ['Pi', { source: 'coding_agent', agent: 'pi', codingAgentId: 'pi' }, '/coding-agents/pi.svg'],
+    ['Grok', { source: 'coding_agent', agent: 'grok', codingAgentId: 'grok' }, '/coding-agents/grok.svg'],
+    ['OpenCode', { source: 'coding_agent', agent: 'opencode', codingAgentId: 'opencode' }, '/coding-agents/opencode.png'],
   ])('passes the $runtime avatar to Assistant message bubbles', async (label, identity, src) => {
     const chatStore = useChatStore()
     const activeSession = { ...makeSession(`avatar-${label}`), ...identity } as Session
