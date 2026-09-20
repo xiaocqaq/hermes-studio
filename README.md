@@ -15,7 +15,7 @@
   ·
   <a href="https://ekkostudio.xyz/#/docs/getting-started">Documentation</a>
   ·
-  <code>npm install -g hermes-web-ui && hermes-web-ui start</code>
+  <code>npm install -g ekko-studio && ekko-studio-web start</code>
 </p>
 
 <p align="center">
@@ -23,14 +23,15 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/hermes-web-ui"><img src="https://img.shields.io/npm/v/hermes-web-ui?style=flat-square&color=blue" alt="npm version"/></a>
-  <a href="https://github.com/EKKOLearnAI/hermes-studio/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/hermes-web-ui?style=flat-square" alt="license"/></a>
+  <a href="https://www.npmjs.com/package/ekko-studio"><img src="https://img.shields.io/npm/v/ekko-studio?style=flat-square&color=blue" alt="npm version"/></a>
+  <a href="https://github.com/EKKOLearnAI/hermes-studio/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/ekko-studio?style=flat-square" alt="license"/></a>
   <a href="https://github.com/EKKOLearnAI/hermes-studio/stargazers"><img src="https://img.shields.io/github/stars/EKKOLearnAI/hermes-studio?style=flat-square" alt="stars"/></a>
 </p>
 
 Ekko Studio was previously named Hermes Studio / Hermes Web UI. The GitHub
-repository remains `EKKOLearnAI/hermes-studio`, and the npm package and server CLI
-remain `hermes-web-ui`; use these names in clone and installation commands.
+repository remains `EKKOLearnAI/hermes-studio`. The primary npm package is
+`ekko-studio`, with the `ekko-studio-web` command. The legacy `hermes-web-ui`
+package and command remain supported and receive the same releases.
 
 ## Screenshots
 
@@ -245,13 +246,13 @@ CLI maintenance commands:
 
 ```bash
 # Delete persisted login IP lock records
-hermes-web-ui clear-login-locks
+ekko-studio-web clear-login-locks
 
 # Delete login locks and restart the running Studio server
-hermes-web-ui clear-login-locks --restart
+ekko-studio-web clear-login-locks --restart
 
 # Create or reset the default super administrator login to admin / 123456
-hermes-web-ui reset-default-login
+ekko-studio-web reset-default-login
 ```
 
 `clear-login-locks` removes `${HERMES_WEB_UI_HOME:-~/.hermes-web-ui}/.login-lock.json`. If the server is running, restart it to clear in-memory lock state. `reset-default-login` updates the Studio account database; if an `admin` user already exists, its password is reset to `123456` and the account is enabled as a super administrator.
@@ -335,9 +336,14 @@ unavailable, the updater falls back to
 ### npm
 
 ```bash
-npm install -g hermes-web-ui
-hermes-web-ui start
+npm install -g ekko-studio
+ekko-studio-web start
 ```
+
+The legacy package `hermes-web-ui` continues to receive the same releases.
+Both packages expose `ekko-studio-web` and the existing commands. Install either
+package; their global command aliases overlap. To switch, uninstall the old
+package before installing the other. User data remains in `~/.hermes-web-ui`.
 
 Open **http://localhost:8648**
 
@@ -439,25 +445,27 @@ These variables configure Ekko Studio, its local Hermes runtime integration, and
 
 ### CLI Commands
 
+`hermes-web-ui` remains an alias for the `ekko-studio-web` commands below.
+
 | Command | Description |
 | --- | --- |
-| `hermes-web-ui start [port]` | Start in background; accepts a positional port or `--port <port>` |
-| `hermes-web-ui client [port]` | Start for a remote client with gateway autostart disabled and permissive CORS |
-| `hermes-web-ui restart [port]` | Restart; stops the bridge by default |
-| `hermes-web-ui stop` | Stop the background process |
-| `hermes-web-ui status` | Check if running |
-| `hermes-web-ui clear-login-locks [--restart]` | Clear persisted login locks, optionally restart |
-| `hermes-web-ui reset-default-login` | Create or reset the default administrator login |
-| `hermes-web-ui update` / `upgrade` | Update to the latest version and restart |
-| `hermes-web-ui version` / `-v` | Show the version |
-| `hermes-web-ui -h` | Show help |
+| `ekko-studio-web start [port]` | Start in background; accepts a positional port or `--port <port>` |
+| `ekko-studio-web client [port]` | Start for a remote client with gateway autostart disabled and permissive CORS |
+| `ekko-studio-web restart [port]` | Restart; stops the bridge by default |
+| `ekko-studio-web stop` | Stop the background process |
+| `ekko-studio-web status` | Check if running |
+| `ekko-studio-web clear-login-locks [--restart]` | Clear persisted login locks, optionally restart |
+| `ekko-studio-web reset-default-login` | Create or reset the default administrator login |
+| `ekko-studio-web update` / `upgrade` | Update to the latest version and restart |
+| `ekko-studio-web version` / `-v` | Show the version |
+| `ekko-studio-web -h` | Show help |
 | `hermes-web-ui-mcp [api\|browser\|devices\|use]` | Run one managed Studio MCP toolset (same as `ekko-studio-mcp`) |
 
 Add `--no-open` to `start` or `client` when no browser should open.
 
 `restart`, `update`, and `upgrade` stop the Agent Bridge broker by default so restarted or updated servers do not reuse stale Python bridge processes. Set `HERMES_AGENT_BRIDGE_STOP_ON_SHUTDOWN=0` before restarting only when you explicitly want to keep the bridge broker and running bridge sessions alive.
 
-`update` / `upgrade` first attempt `npm cache clean --force`, then run `npm install -g hermes-web-ui@latest` and restart. Cache cleanup is best-effort; if it fails, the updater continues with the install.
+`update` / `upgrade` first attempt `npm cache clean --force`, then install the latest version of the running package (`ekko-studio@latest` or `hermes-web-ui@latest`) and restart that package. The Web UI version check uses the same package identity. Cache cleanup is best-effort; if it fails, the updater continues with the install.
 
 ### Auto Configuration
 

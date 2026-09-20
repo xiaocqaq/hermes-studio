@@ -70,6 +70,47 @@ npm run test:e2e
 npm run build
 ```
 
+## npm Publishing
+
+The source package is `ekko-studio`. `npm run build` followed by
+`npm run pack:npm -- /absolute/output/directory` creates both `ekko-studio` and
+`hermes-web-ui` tarballs with the same version and build. Each tarball carries
+its own package name; the source manifest is not rewritten. Both expose
+`ekko-studio-web` and the existing CLI aliases.
+
+For a local release, first set an unpublished version and log in with `npm login`.
+Then run `npm run publish:npm` to build, pack, and publish both packages using
+your local npm credentials. It does not bump the version or create a Git tag.
+
+```bash
+npm run publish:npm -- --dry-run # Build and pack; only print publish commands
+npm run publish:npm             # Build, pack, and publish both packages
+npm run publish:npm -- --package hermes-web-ui # Retry just this package
+npm run publish:npm -- --tag next             # Override the npm dist-tag
+```
+
+The local script selects `latest` for stable versions and `next` for prereleases.
+If a publish fails, it stops and prints the command for retrying that package.
+Use `--package` to avoid republishing a package that already succeeded. npm may
+still request login or publication approval according to the account settings.
+
+`.github/workflows/npm-publish.yml` runs on published GitHub Releases or manually
+with an existing tag matching `package.json`'s version (optionally prefixed by
+`v`). It builds and verifies both packages once, then publishes each in a
+separate job. Stable releases use `latest`; prerelease versions or GitHub
+prerelease events use `next`. If only one publish fails, rerun the failed job.
+
+Configure repository Actions secret `NPM_TOKEN` with publish permission for
+**both** packages (including permission to create `ekko-studio` on its first
+release) and non-interactive publishing enabled. Only the publish jobs receive
+the token. Existing npm versions cannot be overwritten.
+
+Web UI update checks and CLI/Web UI upgrades read the running installation's
+package name, update that package, and restart its CLI by absolute package path.
+Shared data stays under `~/.hermes-web-ui`. The packages provide overlapping
+command aliases and are intended as alternative installations, not simultaneous
+global installs; uninstall the previous package before switching names.
+
 ## Commit And PR Rules
 
 - Branch from `main` for new work.

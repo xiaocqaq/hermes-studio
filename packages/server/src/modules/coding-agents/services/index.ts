@@ -1,3 +1,4 @@
+import { studioMcpCapabilities } from '../../studio/public/runs/mcp-capabilities'
 import { prepareDshRuntime, DSH_API_KEY_ENV } from './dsh/runtime-config'
 import { readDshMcpServers, validateDshSettings } from './dsh/config'
 import { createDshHost } from './dsh/host'
@@ -10,6 +11,7 @@ import { chmod, copyFile, cp, lstat, mkdir, open, readFile, readdir, rename, rm,
 import { homedir } from 'os'
 import { delimiter, dirname, join } from 'path'
 import { promisify } from 'util'
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml'
 import { getWebUiHome } from '../../studio/public/config'
 import { getProfileDir, PROVIDER_ENV_MAP, readConfigYamlForProfile, safeReadFile } from '../../studio/public/profile-config'
 import { getCompatibleCustomProviders } from '../../studio/contracts/provider-compat'
@@ -20,7 +22,7 @@ import { hermesPromptDocument, writeManagedPromptFile } from './prompt-file'
 import type { ApiMode, CodingAgentImageInput } from '../protocol/types'
 import { PROVIDER_PRESETS } from '../../studio/contracts/providers'
 import { getModelContextLength, getModelRuntimeCapabilities } from '../../studio/public/provider-runtime'
-import { getSystemPrompt } from '../../studio/public/runs/prompt'
+import { getSystemPrompt, studioMcpUsageGuidelines } from '../../studio/public/runs/prompt'
 import { codingAgentRunManager } from './runtime/run-manager'
 import { mergePiSettings, userSettingsProvidesPiMcpAdapter } from './pi/settings'
 import { PI_EXTENDED_THINKING_LEVEL_MAP, piModelSupportsThinking } from './pi/thinking'
@@ -55,7 +57,13 @@ const NODE_ENVIRONMENT_MISSING_CODE = 'node_environment_missing'
 const POSIX_LAUNCHER_FILE = 'launch.sh'
 const WINDOWS_LAUNCHER_FILE = 'launch.ps1'
 const CLAUDE_CODE_SKIP_PERMISSIONS_ARGS = ['--dangerously-skip-permissions']
-const CLAUDE_CODE_ROOT_PERMISSION_ARGS = ['--permission-mode', 'auto']
+const CLAUDE_CODE_TASK_PLAN_TOOL = 'mcp__ekko-studio-interaction__ekko_studio_update_plan'
+const CLAUDE_CODE_ROOT_PERMISSION_ARGS = [
+  '--permission-mode',
+  'auto',
+  '--allowedTools',
+  CLAUDE_CODE_TASK_PLAN_TOOL,
+]
 // Claude Code auto-compact is on by default, but Studio never tells it the
 // model context window, so it can compact too late for the 20MB proxy body
 // limit. Mirror Hermes' 50% compression budget and pass Studio's window.
@@ -92,9 +100,11 @@ const HERMES_MCP_SERVERS: ReadonlyArray<{ name: string; toolset: string }> = [
   { name: 'ekko-studio-browser', toolset: 'browser' },
   { name: 'ekko-studio-devices', toolset: 'devices' },
   { name: 'ekko-studio-use', toolset: 'use' },
+  { name: 'ekko-studio-interaction', toolset: 'plan' },
 ]
 const HERMES_MCP_SERVER_NAMES: Set<string> = new Set(HERMES_MCP_SERVERS.map(server => server.name))
 const LEGACY_HERMES_MCP_SERVER_NAMES = new Set([
+  'ekko-studio-plan',
   'hermes-studio-api',
   'hermes-studio-browser',
   'hermes-studio-devices',
@@ -1077,7 +1087,7 @@ async function activeGlobalCodexInstructions(sourceHome: string): Promise<string
   return await safeReadFile(join(sourceHome, 'AGENTS.md')) || ''
 }
 
-async function prepareGlobalCodexShadowHome(rootDir: string, systemPrompt: string): Promise<string> {
+async function prepareGlobalCodexShadowHome(rootDir: string, systemPrompt: string, profile: string): Promise<string> {
   const sourceHome = getGlobalCodexHome()
   await mkdir(rootDir, { recursive: true, mode: 0o700 })
 
@@ -1093,6 +1103,15 @@ async function prepareGlobalCodexShadowHome(rootDir: string, systemPrompt: strin
       }
     }
   }
+
+  const config = parseToml(await safeReadFile(join(sourceHome, 'config.toml')) || '')
+  const externalMcp = { ...(config.mcp_servers as Record<string, any> || {}) }
+  for (const [name, server] of Object.entries(externalMcp)) {
+    if (HERMES_MCP_SERVER_NAMES.has(name) || LEGACY_HERMES_MCP_SERVER_NAMES.has(name)
+      || server?.env?.[HERMES_MCP_MANAGED_ENV_KEY]) delete externalMcp[name]
+  }
+  config.mcp_servers = { ...externalMcp, ...getCodingAgentManagedMcpServerConfigs('codex', profile) } as any
+  await writeFile(join(rootDir, 'config.toml'), stringifyToml(config), { mode: 0o600 })
 
   const promptPath = join(rootDir, 'AGENTS.md')
   await writeManagedPromptFile(promptPath, systemPrompt, await activeGlobalCodexInstructions(sourceHome))
@@ -1175,6 +1194,7 @@ function hermesMcpServerConfig(profile: string, serverName: string, toolset: str
       HERMES_WEB_UI_PROFILE: profile,
       HERMES_MCP_SERVER_NAME: serverName,
       HERMES_MCP_TOOLSET: toolset,
+      HERMES_MCP_USER_CLARIFICATION: '1',
       [HERMES_MCP_MANAGED_ENV_KEY]: '1',
     },
   }
@@ -1187,9 +1207,18 @@ function managedHermesMcpServerConfig(
   toolset: string,
 ): Record<string, unknown> {
   const override = getManagedMcpServerOverride(agentId, profile, serverName)
-  return Object.keys(override).length
+  const server: Record<string, unknown> = Object.keys(override).length
     ? override
     : hermesMcpServerConfig(profile, serverName, toolset)
+  if (toolset === 'plan') {
+    const env = server.env as Record<string, string> | undefined
+    if (env?.[HERMES_MCP_MANAGED_ENV_KEY] === '1') {
+      server.env = { ...env, HERMES_MCP_SERVER_NAME: serverName, HERMES_MCP_USER_CLARIFICATION: '1' }
+    }
+    if (agentId === 'claude-code' || agentId === 'opencode') server.timeout = Math.max(360_000, Number(server.timeout) || 0)
+    if (agentId === 'dsh') server.toolCallTimeoutMs = Math.max(360_000, Number(server.toolCallTimeoutMs) || 0)
+  }
+  return server
 }
 
 function isManagedHermesMcpServer(value: unknown): boolean {
@@ -1491,7 +1520,7 @@ function codexMcpConfigToml(
     if (Array.isArray(server.args) && server.args.length) lines.push(`args = ${tomlStringArray(server.args.map(String))}`)
     if (disabledManaged.has(item.name)) lines.push('enabled = false')
     lines.push(`startup_timeout_sec = ${typeof server.startup_timeout_sec === 'number' ? server.startup_timeout_sec : 120}`)
-    if (item.toolset === 'use') lines.push(`tool_timeout_sec = ${Math.max(360, Number(server.tool_timeout_sec) || 0)}`)
+    if (item.toolset === 'use' || item.toolset === 'plan') lines.push(`tool_timeout_sec = ${Math.max(360, Number(server.tool_timeout_sec) || 0)}`)
     if (server.env && typeof server.env === 'object' && !Array.isArray(server.env)) {
       lines.push(`env = ${tomlInlineStringTable(server.env as Record<string, string>)}`)
     }
@@ -1572,6 +1601,23 @@ function piStudioRuntimeExtension(): string {
     '}',
     '',
   ].join('\n')
+}
+
+async function prepareGlobalPiMcp(rootDir: string, profile: string) {
+  const settings = await readPiSettings()
+  const userProvidesAdapter = userSettingsProvidesPiMcpAdapter(settings)
+  if (!userProvidesAdapter && !existsSync(getPiMcpAdapterEntry())) await installBundledPiMcpAdapter()
+  const mcpPath = join(rootDir, 'mcp.json')
+  await writeFile(mcpPath, piMcpConfig(profile,
+    await safeReadFile(getLiveConfigFileDefinition('pi', 'mcp')?.absolutePath || ''),
+  ), { mode: 0o600 })
+  return {
+    file: { key: 'mcp', path: 'mcp.json', absolutePath: mcpPath },
+    args: [
+      ...(!userProvidesAdapter ? ['--extension', getPiMcpAdapterEntry()] : []),
+      '--mcp-config', mcpPath,
+    ],
+  }
 }
 
 const PI_RUNTIME_MCP_SETTINGS: Record<string, unknown> = {
@@ -1670,6 +1716,7 @@ function opencodeMcpServerConfig(server: Record<string, unknown>, enabled: boole
       type: 'local',
       command: [command, ...args],
       enabled,
+      ...(typeof server.timeout === 'number' ? { timeout: server.timeout } : {}),
       ...(server.env && typeof server.env === 'object' && !Array.isArray(server.env)
         ? { environment: server.env }
         : {}),
@@ -1679,6 +1726,7 @@ function opencodeMcpServerConfig(server: Record<string, unknown>, enabled: boole
     type: 'remote',
     url: String(server.url || ''),
     enabled,
+    ...(typeof server.timeout === 'number' ? { timeout: server.timeout } : {}),
     ...(server.headers && typeof server.headers === 'object' && !Array.isArray(server.headers)
       ? { headers: server.headers }
       : {}),
@@ -1852,7 +1900,7 @@ export function getCodingAgentManagedMcpServerConfigs(
       return [item.name, {
         ...server,
         startup_timeout_sec: 120,
-        ...(item.toolset === 'use' ? { tool_timeout_sec: Math.max(360, Number(server.tool_timeout_sec) || 0) } : {}),
+        ...((item.toolset === 'use' || item.toolset === 'plan') ? { tool_timeout_sec: Math.max(360, Number(server.tool_timeout_sec) || 0) } : {}),
         ...(disabledManaged.has(item.name) ? { enabled: false } : {}),
       }]
     }
@@ -3161,6 +3209,7 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
     throw err
   }
 
+  const mcpCapabilities = studioMcpCapabilities(getCodingAgentManagedMcpServerConfigs(tool.id, input.profile || 'default'))
   const mode = input.mode === 'global' ? 'global' : 'scoped'
   if (mode === 'global') {
     const scope = normalizeConfigScope({ profile: input.profile, provider: 'global' })
@@ -3173,18 +3222,22 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
       await mkdir(rootDir, { recursive: true })
       await writeFile(studioExtensionPath, piStudioRuntimeExtension(), 'utf-8')
       await writeFile(dynamicPromptPath, '', 'utf-8')
+      const mcp = await prepareGlobalPiMcp(rootDir, scope.profile)
       const files = [
         { key: 'studio_extension', path: PI_STUDIO_EXTENSION_FILE, absolutePath: studioExtensionPath },
         { key: 'dynamic_prompt', path: PI_DYNAMIC_PROMPT_FILE, absolutePath: dynamicPromptPath },
+        mcp.file,
       ]
       const env = {
         PI_CODING_AGENT_DIR: join(getGlobalConfigHome(), '.pi', 'agent'),
         HERMES_PI_DYNAMIC_PROMPT_FILE: dynamicPromptPath,
+        ...(input.sessionId ? { [HERMES_STUDIO_SESSION_ENV_KEY]: input.sessionId } : {}),
       }
       const args = [
         '--mode', 'rpc',
         ...(input.agentNativeSessionId ? ['--session-id', input.agentNativeSessionId] : []),
         '--extension', studioExtensionPath,
+        ...mcp.args,
         input.approveProjectConfig === true ? '--approve' : '--no-approve',
       ]
       const launcherPath = await writeLauncherScript({
@@ -3216,7 +3269,9 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
       }
     }
     const rootDir = getScopedRuntimeConfigRoot(tool.id, scope, input)
-    const systemPrompt = String(input.groupSystemPrompt || '').trim() || getSystemPrompt()
+    const systemPrompt = input.groupSystemPrompt?.trim()
+      ? [input.groupSystemPrompt.trim(), studioMcpUsageGuidelines(mcpCapabilities)].filter(Boolean).join('\n\n')
+      : getSystemPrompt(undefined, { mcpCapabilities })
     await mkdir(rootDir, { recursive: true })
 
     let promptFile = ''
@@ -3227,11 +3282,21 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
     if (tool.id === 'claude-code') {
       promptFile = join(rootDir, 'hermes-rules.md')
       await writeManagedPromptFile(promptFile, systemPrompt, '')
-      files = [{ key: 'prompt', path: 'hermes-rules.md', absolutePath: promptFile }]
-      args = ['--append-system-prompt-file', promptFile, ...claudeCodePermissionArgs()]
+      const mcpPath = join(rootDir, 'mcp.json')
+      await writeFile(mcpPath, claudeMcpConfigJson(scope.profile,
+        await safeReadFile(getLiveConfigFileDefinition('claude-code', 'mcp')?.absolutePath || ''),
+      ), { mode: 0o600 })
+      files = [
+        { key: 'prompt', path: 'hermes-rules.md', absolutePath: promptFile },
+        { key: 'mcp', path: 'mcp.json', absolutePath: mcpPath },
+      ]
+      args = ['--append-system-prompt-file', promptFile, '--mcp-config', mcpPath, ...claudeCodePermissionArgs()]
     } else if (tool.id === 'codex') {
-      promptFile = await prepareGlobalCodexShadowHome(rootDir, systemPrompt)
-      files = [{ key: 'agents', path: 'AGENTS.md', absolutePath: promptFile }]
+      promptFile = await prepareGlobalCodexShadowHome(rootDir, systemPrompt, scope.profile)
+      files = [
+        { key: 'agents', path: 'AGENTS.md', absolutePath: promptFile },
+        { key: 'config', path: 'config.toml', absolutePath: join(rootDir, 'config.toml') },
+      ]
       env = { CODEX_HOME: rootDir }
     } else if (tool.id === 'grok') {
       const prepared = await prepareGlobalGrokRuntime({
@@ -3288,6 +3353,12 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
       await writeManagedPromptFile(promptFile, systemPrompt, '')
       files = [{ key: 'prompt', path: 'APPEND_SYSTEM.md', absolutePath: promptFile }]
       args = ['--append-system-prompt', promptFile]
+      if (tool.id === 'pi') {
+        const mcp = await prepareGlobalPiMcp(rootDir, scope.profile)
+        files.push(mcp.file)
+        args.push(...mcp.args)
+        env = { PI_CODING_AGENT_DIR: join(getGlobalConfigHome(), '.pi', 'agent') }
+      }
     }
     const chatSessionId = String(input.sessionId || '').trim()
     if (chatSessionId) env[HERMES_STUDIO_SESSION_ENV_KEY] = chatSessionId
@@ -3331,7 +3402,11 @@ export async function prepareCodingAgentLaunch(id: string, input: CodingAgentLau
   const apiMode = freeRuntime?.apiMode || normalizeLaunchApiMode(input.apiMode, preset?.api_mode || 'chat_completions')
   const reasoningEffort = String(input.reasoningEffort || '').trim()
   const groupSystemPrompt = String(input.groupSystemPrompt || '').trim()
-  const scopedSystemPrompt = tool.id === 'pi' && groupSystemPrompt ? getSystemPrompt() : groupSystemPrompt || getSystemPrompt()
+  const scopedSystemPrompt = tool.id === 'pi' && groupSystemPrompt
+    ? getSystemPrompt(undefined, { mcpCapabilities })
+    : groupSystemPrompt
+      ? [groupSystemPrompt, studioMcpUsageGuidelines(mcpCapabilities)].filter(Boolean).join('\n\n')
+      : getSystemPrompt(undefined, { mcpCapabilities })
   const isolatedInput = tool.id === 'pi' || tool.id === 'dsh'
     ? {
         ...input,
@@ -3833,12 +3908,10 @@ async function startCodingAgentRunInternal(
       logger.warn({ err, agentId: id, runtimeMcpPath }, '[coding-agent-mcp] runtime isolation failed open')
     }
   }
-  const commandExecutionEnv = process.platform === 'win32'
-    ? {
-        ...(await commandEnv()),
-        ...launch.env,
-      }
-    : launch.env
+  const commandExecutionEnv = {
+    ...(await commandEnv()),
+    ...launch.env,
+  }
   const runtimeCommand = process.platform === 'win32'
     ? await resolveCommandForExecution(launch.command, commandExecutionEnv)
     : launch.command
@@ -3919,7 +3992,7 @@ export async function compactStoredCodingAgentSession(
     isolateSettings: true,
   })
   const launchEnv = {
-    ...process.env,
+    ...(await commandEnv()),
     ...launch.env,
   }
   const command = process.platform === 'win32'

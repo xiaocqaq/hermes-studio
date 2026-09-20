@@ -21,7 +21,7 @@ import {
 } from '../../packages/server/src/modules/coding-agents/services/runtime/run-manager'
 import { applyResponseStreamEvent } from '../../packages/server/src/modules/studio/services/chat-run/response-stream'
 import { initAllHermesTables } from '../../packages/server/src/modules/studio/infrastructure/database/schemas'
-import { addMessage, getSession, getSessionDetail, listSessions } from '../../packages/server/src/modules/studio/repositories/session-store'
+import { addMessage, createSession, getSession, getSessionDetail, listSessions } from '../../packages/server/src/modules/studio/repositories/session-store'
 import { getRecordedUsageTotals, getUsage } from '../../packages/server/src/modules/studio/repositories/usage-store'
 import { getChatRunServer, setChatRunServer } from '../../packages/server/src/modules/studio/services/chat-run/server-registry'
 
@@ -76,6 +76,77 @@ describe('coding agent completion errors', () => {
     } finally {
       setChatRunServer(previous)
     }
+  })
+
+  it.each([
+    ['claude-code', 'claude', 'Claude Code'],
+    ['grok', 'grok', 'Grok'],
+  ])('detaches an oversized %s native session after asynchronous compact failure', (agentId, storedAgent, agentName) => {
+    initAllHermesTables()
+    const manager = new CodingAgentRunManager()
+    const emitted = vi.fn()
+    ;(manager as any).emitToChat = emitted
+    const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const sessionId = `chat-native-compact-overflow-${agentId}-${suffix}`
+    createSession({
+      id: sessionId,
+      profile: 'default',
+      source: 'coding_agent',
+      agent: storedAgent,
+      agent_session_id: `agent-${suffix}`,
+      agent_native_session_id: `native-${suffix}`,
+      model: 'test-model',
+      provider: 'test-provider',
+      api_mode: 'chat_completions',
+      reasoning_effort: '',
+      agent_preset: '',
+      title: '',
+      workspace: process.cwd(),
+    })
+    const run: any = {
+      launch: { agentId, sessionId, agentNativeSessionId: `native-${suffix}` },
+      nativeCompactCommandActive: true,
+      nativeResumeReady: true,
+    }
+
+    ;(manager as any).recoverFailedNativeCompact(run, 'context_length_exceeded: input exceeds the context window')
+
+    expect(getSession(sessionId)?.agent_native_session_id).toBe('')
+    expect(run.launch.agentNativeSessionId).toBe('')
+    expect(run.nativeResumeReady).toBe(false)
+    expect(run.disposeAfterTurn).toBe(true)
+    expect(emitted).toHaveBeenCalledWith(sessionId, 'session.command', expect.objectContaining({
+      command: 'compact',
+      ok: true,
+      resetNativeThread: true,
+      message: expect.stringContaining(`fresh ${agentName} context`),
+    }))
+  })
+
+  it('does not detach a native session after a non-overflow compact failure', () => {
+    initAllHermesTables()
+    const manager = new CodingAgentRunManager()
+    const emitted = vi.fn()
+    ;(manager as any).emitToChat = emitted
+    const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const sessionId = `chat-native-compact-ordinary-${suffix}`
+    createSession({
+      id: sessionId, profile: 'default', source: 'coding_agent', agent: 'grok',
+      agent_session_id: `agent-${suffix}`, agent_native_session_id: `native-${suffix}`,
+      model: 'test-model', provider: 'test-provider', api_mode: 'chat_completions',
+      reasoning_effort: '', agent_preset: '', title: '', workspace: process.cwd(),
+    })
+    const run: any = {
+      launch: { agentId: 'grok', sessionId, agentNativeSessionId: `native-${suffix}` },
+      nativeCompactCommandActive: true, nativeResumeReady: true,
+    }
+
+    ;(manager as any).recoverFailedNativeCompact(run, 'native compact failed')
+
+    expect(getSession(sessionId)?.agent_native_session_id).toBe(`native-${suffix}`)
+    expect(run.nativeCompactCommandActive).toBe(false)
+    expect(run.disposeAfterTurn).toBeUndefined()
+    expect(emitted).not.toHaveBeenCalled()
   })
 
   it('does not let a stalled usage refresh block the terminal chat event', async () => {
@@ -583,7 +654,7 @@ describe('coding agent run state', () => {
     manager.shutdown()
   })
 
-  it('marks existing scoped Codex runners incompatible when Hermes MCP config is missing', () => {
+  it.each(['scoped', 'global'] as const)('marks existing %s Codex runners incompatible when Studio MCP config is missing', mode => {
     const codexHome = mkdtempSync(join(tmpdir(), 'hwui-codex-mcp-compat-'))
     try {
       writeFileSync(join(codexHome, 'config.toml'), 'model = "gpt-test"\n')
@@ -594,7 +665,7 @@ describe('coding agent run state', () => {
       manager.start({
         agentSessionId: 'agent-session-1',
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         profile: 'default',
         provider: 'test-provider',
         model: 'gpt-test',
@@ -609,15 +680,15 @@ describe('coding agent run state', () => {
 
       expect(manager.isSessionLaunchCompatible('chat-session-1', {
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         provider: 'test-provider',
         model: 'gpt-test',
       })).toBe(false)
 
-      writeFileSync(join(codexHome, 'config.toml'), '[mcp_servers.hermes-studio]\ncommand = "node"\n')
+      writeFileSync(join(codexHome, 'config.toml'), ['api', 'browser', 'devices', 'use', 'interaction'].map(toolset => `[mcp_servers.ekko-studio-${toolset}]\ncommand = "node"\n`).join('\n'))
       expect(manager.isSessionLaunchCompatible('chat-session-1', {
         agentId: 'codex',
-        mode: 'scoped',
+        mode,
         provider: 'test-provider',
         model: 'gpt-test',
       })).toBe(true)
@@ -625,6 +696,25 @@ describe('coding agent run state', () => {
       manager.shutdown()
     } finally {
       rmSync(codexHome, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['claude-code', 'pi'])('refreshes global %s runners that lack the private MCP launch argument', agentId => {
+    const root = mkdtempSync(join(tmpdir(), 'hwui-global-mcp-compat-'))
+    const manager = new CodingAgentRunManager()
+    try {
+      const mcpPath = join(root, 'mcp.json')
+      writeFileSync(mcpPath, '{"mcpServers":{}}')
+      const launch = { agentId, mode: 'global', args: [] as string[], reasoningEffort: '' }
+      ;(manager as any).getBySession = () => ({ exited: false, launch })
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(false)
+      launch.args = ['--mcp-config', mcpPath]
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(true)
+      rmSync(mcpPath)
+      expect(manager.isSessionLaunchCompatible('session', { agentId, mode: 'global' })).toBe(false)
+    } finally {
+      manager.shutdown()
+      rmSync(root, { recursive: true, force: true })
     }
   })
 

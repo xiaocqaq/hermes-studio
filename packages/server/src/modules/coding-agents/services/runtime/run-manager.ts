@@ -33,6 +33,7 @@ import { isolatedCodingAgentChildEnv } from './child-env'
 import { NativeTurnUsage, type NativeUsageRow } from './native-usage'
 import { readCodexTurnModel, readOpenCodeMessageModel } from './native-model'
 import { getCodingAgentGlobalHome } from '../../../studio/public/coding-agent-global-home'
+import { isContextWindowExceededError, nativeContextRecoveryMessage, resetNativeSessionAfterContextOverflow } from '../context-recovery'
 
 export { isolatedCodingAgentChildEnv } from './child-env'
 
@@ -44,7 +45,6 @@ const CODING_AGENT_TOOL_OUTPUT_STORAGE_LIMIT = 32 * 1024
 const CODING_AGENT_TOOL_OUTPUT_HEAD_CHARS = 24 * 1024
 const CODING_AGENT_TOOL_OUTPUT_TAIL_CHARS = 8 * 1024
 const CODEX_REASONING_SUMMARY_ARGS = ['-c', 'model_reasoning_summary="auto"']
-const HERMES_MCP_SERVER_NAME = 'hermes-studio'
 const PI_RPC_REQUEST_TIMEOUT_MS = 30_000
 const PI_RPC_COMPACT_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -200,6 +200,7 @@ export interface ManagedCodingAgentRun {
   pendingChatCompletionEvent?: 'run.completed' | 'run.failed'
   pendingChatCompletionPayload?: Record<string, unknown>
   memoryExportStarted?: boolean
+  nativeCompactCommandActive?: boolean
   assistantMessageId?: string
   piDetachJsonl?: () => void
   piToolBlocks?: Map<string, { id: string; name: string; arguments: string; done: boolean }>
@@ -339,13 +340,20 @@ function usageCodingAgent(agentId: string): 'claude_code' | 'codex' | 'pi' | 'gr
 }
 
 function hasManagedHermesMcpConfig(run: ManagedCodingAgentRun): boolean {
-  if (run.launch.mode !== 'scoped') return true
+  if (run.launch.mode !== 'scoped') {
+    if (run.launch.agentId === 'claude-code' || run.launch.agentId === 'pi') {
+      const flagIndex = run.launch.args.indexOf('--mcp-config')
+      const mcpPath = flagIndex >= 0 ? run.launch.args[flagIndex + 1] : ''
+      return Boolean(mcpPath && existsSync(mcpPath))
+    }
+    if (run.launch.agentId !== 'codex') return true
+  }
   if (run.launch.agentId === 'pi') {
     const piHome = String(run.launch.env?.PI_CODING_AGENT_DIR || '').trim()
     if (!piHome) return false
     try {
       const config = readFileSync(join(piHome, 'mcp.json'), 'utf-8')
-      return config.includes('"ekko-studio-api"') && config.includes('"ekko-studio-use"')
+      return config.includes('"ekko-studio-api"') && config.includes('"ekko-studio-use"') && config.includes('"ekko-studio-interaction"')
     } catch {
       return false
     }
@@ -355,7 +363,7 @@ function hasManagedHermesMcpConfig(run: ManagedCodingAgentRun): boolean {
     if (!grokHome) return false
     try {
       const config = readFileSync(join(grokHome, 'config.toml'), 'utf-8')
-      return config.includes('[mcp_servers.ekko-studio-api]') && config.includes('[mcp_servers.ekko-studio-use]')
+      return config.includes('[mcp_servers.ekko-studio-api]') && config.includes('[mcp_servers.ekko-studio-use]') && config.includes('[mcp_servers.ekko-studio-interaction]')
     } catch {
       return false
     }
@@ -365,7 +373,7 @@ function hasManagedHermesMcpConfig(run: ManagedCodingAgentRun): boolean {
     if (!configDir) return false
     try {
       const config = readFileSync(join(configDir, 'opencode.json'), 'utf-8')
-      return config.includes('"ekko-studio-api"') && config.includes('"ekko-studio-use"')
+      return config.includes('"ekko-studio-api"') && config.includes('"ekko-studio-use"') && config.includes('"ekko-studio-interaction"')
     } catch {
       return false
     }
@@ -375,7 +383,7 @@ function hasManagedHermesMcpConfig(run: ManagedCodingAgentRun): boolean {
   if (!codexHome) return false
   try {
     const config = readFileSync(join(codexHome, 'config.toml'), 'utf-8')
-    return config.includes(`[mcp_servers.${HERMES_MCP_SERVER_NAME}]`)
+    return ['api', 'browser', 'devices', 'use', 'interaction'].every(toolset => config.includes(`[mcp_servers.ekko-studio-${toolset}]`))
   } catch {
     return false
   }
@@ -483,10 +491,24 @@ function piAssistantMessageText(message: any): string {
     .join('')
 }
 
-function childProcessErrorMessage(err: unknown): string {
+function codingAgentDisplayName(agentId: string): string {
+  if (agentId === 'codex') return 'Codex'
+  if (agentId === 'pi') return 'Pi'
+  if (agentId === 'grok') return 'Grok'
+  if (agentId === 'opencode') return 'OpenCode'
+  if (agentId === 'dsh') return 'DeepSeek Harness'
+  return 'Claude Code'
+}
+
+function childProcessErrorMessage(err: unknown, agentId?: string): string {
+  const record = err && typeof err === 'object'
+    ? err as Record<string, unknown>
+    : undefined
+  if (record?.code === 'ENOENT' && agentId) {
+    return `${codingAgentDisplayName(agentId)} is not installed or is not available in PATH. Install it in Coding Agent settings, then try again.`
+  }
   if (err instanceof Error) return err.message
-  if (!err || typeof err !== 'object') return String(err || 'Process failed')
-  const record = err as Record<string, unknown>
+  if (!record) return String(err || 'Process failed')
   const message = record.message
   if (typeof message === 'string' && message.trim()) return message
   try {
@@ -894,6 +916,7 @@ export class CodingAgentRunManager {
     const nativeSessionId = String(run.launch.agentNativeSessionId || '').trim()
     if (run.launch.agentId === 'claude-code') {
       if (!nativeSessionId) throw new Error('Claude Code session has no native session to compact')
+      run.nativeCompactCommandActive = true
       this.startClaudePrintTurn(run, `/compact${args ? ` ${args}` : ''}`, '', [])
       return { started: true }
     }
@@ -913,6 +936,7 @@ export class CodingAgentRunManager {
     }
     if (run.launch.agentId === 'grok') {
       if (!nativeSessionId) throw new Error('Grok session has no native session to compact')
+      run.nativeCompactCommandActive = true
       this.startGrokPrintTurn(run, `/compact${args ? ` ${args}` : ''}`, '', [])
       return { started: true }
     }
@@ -1454,7 +1478,7 @@ export class CodingAgentRunManager {
     })
     child.on('error', (err) => {
       logger.warn({ err, runId: run.id, sessionId: run.launch.sessionId }, '[coding-agent-run] Pi RPC failed to start')
-      if (!run.printCompleted) this.failClaudePrintTurn(run, childProcessErrorMessage(err))
+      if (!run.printCompleted) this.failClaudePrintTurn(run, childProcessErrorMessage(err, run.launch.agentId))
     })
     child.on('close', (code) => {
       if (run.currentChildKillTimer) clearTimeout(run.currentChildKillTimer)
@@ -1956,7 +1980,7 @@ export class CodingAgentRunManager {
             object: 'response',
             status: 'failed',
             model: run.launch.model,
-            error: { message: childProcessErrorMessage(err) },
+            error: { message: childProcessErrorMessage(err, run.launch.agentId) },
             output: [],
           },
         },
@@ -2305,8 +2329,32 @@ export class CodingAgentRunManager {
     })
   }
 
+  private recoverFailedNativeCompact(run: ManagedCodingAgentRun, error: unknown) {
+    if (!run.nativeCompactCommandActive) return
+    run.nativeCompactCommandActive = false
+    if (!isContextWindowExceededError(error)) return
+    const recovery = resetNativeSessionAfterContextOverflow(run.launch.sessionId, run.launch.agentId)
+    if (!recovery.reset) return
+    run.launch.agentNativeSessionId = ''
+    run.nativeResumeReady = false
+    run.disposeAfterTurn = true
+    const agentName = run.launch.agentId === 'grok' ? 'Grok' : 'Claude Code'
+    this.emitToChat(run.launch.sessionId, 'session.command', {
+      event: 'session.command',
+      session_id: run.launch.sessionId,
+      command: 'compact',
+      action: 'compact',
+      ok: true,
+      terminal: true,
+      compacted: false,
+      resetNativeThread: true,
+      message: nativeContextRecoveryMessage(agentName),
+    })
+  }
+
   private failClaudePrintTurn(run: ManagedCodingAgentRun, errorText: string) {
     if (run.printCompleted) return
+    this.recoverFailedNativeCompact(run, errorText)
     run.printCompleted = true
     const existingText = run.printText || ''
     const appendedError = appendedTextDelta(existingText, errorText)
@@ -2351,6 +2399,7 @@ export class CodingAgentRunManager {
 
   private completeClaudePrintTurn(run: ManagedCodingAgentRun, usage?: any) {
     if (run.printCompleted) return
+    run.nativeCompactCommandActive = false
     run.printCompleted = true
     const text = run.printText || ''
     const output = run.printTextStarted
@@ -2402,7 +2451,7 @@ export class CodingAgentRunManager {
     startDshChatTurn(run, input, systemPrompt, images, {
       spawn: spawnCodingAgentChild, isRunning: childIsRunning,
       terminate: terminateChildProcess, forceKill: forceKillChildProcess,
-      processError: childProcessErrorMessage, exitError: (code, stderr) => exitErrorMessage('DSH', code, stderr),
+      processError: error => childProcessErrorMessage(error, run.launch.agentId), exitError: (code, stderr) => exitErrorMessage('DSH', code, stderr),
       stderr: chunk => { appendChildStderr(run, chunk) }, touch: () => this.touch(run),
       response: event => this.handleClaudePrintResponseEvent(run, event),
       text: (text, live) => this.appendCodexText(run, text, live), reasoning: text => this.appendCodexReasoning(run, text),
@@ -2502,7 +2551,7 @@ export class CodingAgentRunManager {
       onError: (err) => {
         run.currentChild = undefined
         logger.warn({ err, runId: run.id, sessionId: run.launch.sessionId }, '[coding-agent-run] grok failed to start')
-        if (!run.printCompleted) this.failCodexExecTurn(run, childProcessErrorMessage(err))
+        if (!run.printCompleted) this.failCodexExecTurn(run, childProcessErrorMessage(err, run.launch.agentId))
       },
       onClose: (code) => {
         run.currentChild = undefined
@@ -2601,7 +2650,7 @@ export class CodingAgentRunManager {
     child.on('error', (err) => {
       run.currentChild = undefined
       logger.warn({ err, runId: run.id, sessionId: run.launch.sessionId }, '[coding-agent-run] opencode failed to start')
-      if (!run.printCompleted) this.failClaudePrintTurn(run, childProcessErrorMessage(err))
+      if (!run.printCompleted) this.failClaudePrintTurn(run, childProcessErrorMessage(err, run.launch.agentId))
     })
     child.on('close', (code) => {
       if (stdoutBuffer.trim()) this.handleOpenCodeLine(run, stdoutBuffer)
@@ -2839,7 +2888,7 @@ export class CodingAgentRunManager {
             object: 'response',
             status: 'failed',
             model: run.launch.model,
-            error: { message: childProcessErrorMessage(err) },
+            error: { message: childProcessErrorMessage(err, run.launch.agentId) },
             output: [],
           },
         },

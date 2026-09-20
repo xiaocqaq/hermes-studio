@@ -36,10 +36,13 @@ const ALLOWED_REQUEST_HEADERS = new Set([
   'range',
   'x-hermes-profile',
   'x-request-id',
+  'x-app-access-token',
+  'x-session-share-token',
   'x-group-agent-request-secret',
   'x-expected-sha256',
 ])
-const ALLOWED_SOCKET_NAMESPACES = new Set(['/chat-run', '/group-chat', '/workflow', '/group-chat-agent-relay'])
+const ALLOWED_TERMINAL_CLIENT_EVENTS = new Set(['terminal.capabilities', 'terminal.list', 'terminal.create', 'terminal.attach', 'terminal.read', 'terminal.input', 'terminal.resize', 'terminal.detach', 'terminal.close'])
+const ALLOWED_SOCKET_NAMESPACES = new Set(['/terminal', '/chat-run', '/group-chat', '/workflow', '/group-chat-agent-relay'])
 const ALLOWED_GROUP_AGENT_CLIENT_EVENTS = new Set([
   'run.accepted', 'run.completed', 'run.failed', 'agent.event', 'agent.events', 'agent.config.update', 'attachment.read', 'connector.revoke',
 ])
@@ -62,6 +65,7 @@ const ALLOWED_CHAT_RUN_CLIENT_EVENTS = new Set([
 const ALLOWED_GROUP_CHAT_CLIENT_EVENTS = new Set([
   'join',
   'load_pending_approvals',
+  'load_room_agent_activities',
   'load_messages',
   'update_member_profile',
   'message',
@@ -1201,6 +1205,7 @@ function isMediaHttpRequest(request: AppRelayHttpRequest): boolean {
 }
 
 function isAllowedSocketEvent(namespace: string, event: string): boolean {
+  if (namespace === '/terminal') return ALLOWED_TERMINAL_CLIENT_EVENTS.has(event)
   if (namespace === '/group-chat-agent-relay') return ALLOWED_GROUP_AGENT_CLIENT_EVENTS.has(event)
   if (namespace === '/chat-run') return ALLOWED_CHAT_RUN_CLIENT_EVENTS.has(event)
   if (namespace === '/group-chat') return ALLOWED_GROUP_CHAT_CLIENT_EVENTS.has(event)
