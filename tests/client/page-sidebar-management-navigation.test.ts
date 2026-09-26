@@ -31,19 +31,13 @@ describe('PageSidebarNav management links', () => {
     routerPush.mockReset()
   })
 
-  it('exposes Jobs and Kanban from the main chat sidebar', async () => {
+  it('exposes Learning Journey from the main chat sidebar', async () => {
     const wrapper = mount(PageSidebarNav, {
       props: { active: 'chat' },
     })
     const buttons = wrapper.findAll('.page-sidebar-tab')
 
-    await buttons.find(button => button.text() === 'sidebar.jobs')!.trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({ name: 'hermes.jobs' })
-
-    await buttons.find(button => button.text() === 'sidebar.kanban')!.trigger('click')
-    expect(routerPush).toHaveBeenLastCalledWith({
-      name: 'hermes.kanban',
-      query: { board: 'default' },
-    })
+    await buttons.find(button => button.text() === 'sidebar.journey')!.trigger('click')
+    expect(routerPush).toHaveBeenLastCalledWith({ path: '/hermes/journey' })
   })
 })
