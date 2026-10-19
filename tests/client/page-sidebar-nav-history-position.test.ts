@@ -10,16 +10,31 @@ const historyViewSource = readFileSync(
   'utf8',
 )
 
+// Fork: the conversation switch only renders single chat + history. Group chat
+// (群组) and workflow (工作流) are intentionally trimmed from the navigation
+// surfaces; both routes still exist for direct URLs. See
+// docs/harness/fork-customizations.md before restoring them.
 describe('page sidebar conversation switch', () => {
-  it('places history after single chat, group chat, and workflow', () => {
-    const switchStart = navSource.indexOf('conversation-switch conversation-switch--four')
+  it('places history after single chat', () => {
+    const switchStart = navSource.indexOf('class="conversation-switch"')
     const switchSource = navSource.slice(switchStart)
 
     expect(switchStart).toBeGreaterThan(-1)
-    expect(switchSource.indexOf('@click="openChat"')).toBeLessThan(switchSource.indexOf('@click="openGroupChat"'))
-    expect(switchSource.indexOf('@click="openGroupChat"')).toBeLessThan(switchSource.indexOf('@click="openWorkflow"'))
-    expect(switchSource.indexOf('@click="openWorkflow"')).toBeLessThan(switchSource.indexOf('@click="openHistory"'))
+    expect(switchSource.indexOf('@click="openChat"')).toBeGreaterThan(-1)
+    expect(switchSource.indexOf('@click="openChat"')).toBeLessThan(
+      switchSource.indexOf('@click="openHistory"'),
+    )
     expect(navSource.match(/@click="openHistory"/g)).toHaveLength(1)
+  })
+
+  it('keeps group chat and workflow out of the conversation switch', () => {
+    const switchStart = navSource.indexOf('class="conversation-switch"')
+    const switchSource = navSource.slice(switchStart)
+
+    expect(switchSource).not.toContain('@click="openGroupChat"')
+    expect(switchSource).not.toContain('@click="openWorkflow"')
+    expect(navSource).not.toContain("t('sidebar.groupChat')")
+    expect(navSource).not.toContain("t('sidebar.workflow')")
   })
 
   it('shows the conversation switch on the history page', () => {
