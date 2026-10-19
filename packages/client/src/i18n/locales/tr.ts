@@ -314,7 +314,7 @@ export default {
   },
 
   login: {
-    title: 'Ekko Studio',
+    title: 'Hermes Studio',
     description: 'Devam etmek için kullanıcı adınızı ve parolanızı girin.',
     placeholder: 'Erişim belirteci',
     submit: 'Giriş yap',
@@ -478,6 +478,7 @@ export default {
     emptyState: 'Hermes Aracısı ile bir sohbet başlatın', emptyStateAgent: '{agent} ile bir sohbet başlatın', viewOlderInHistory: 'Geçmişteki eski mesajları görüntüle',
     scrollToBottom: 'En alta kaydır', forkedFrom: 'Şuradan çatallandı:', previousLastMessage: 'Önceki son mesaj', cliEmptyState: 'Bir CLI sohbet oturumu başlatın',
     outlineTitle: 'Konuşma özeti', outlineEmpty: 'Konuşma içeriği yok', outlineUserQuestion: 'Kullanıcı sorusu',
+    pullLatest: 'En son yanıtları getir', pullLatestDone: 'En son yanıtlar getirildi', pullLatestUpToDate: 'Zaten güncel', pullLatestFailed: 'En son yanıtlar getirilemedi',
     inputPlaceholder: 'Mesaj yazın... (Göndermek için Enter, yeni satır için Shift+Enter)', inputHeightResizeHint: 'Sohbet giriş alanını yeniden boyutlandırmak için sürükleyin. Sıfırlamak için çift tıklayın.',
     contextRemaining: 'kaldı', contextClickToEdit: 'Bağlam uzunluğunu düzenlemek için tıklayın', contextEditTitle: 'Bağlam uzunluğunu düzenle',
     contextEditDesc: 'Mevcut model için bağlam uzunluğu sınırını belirleyin (jeton cinsinden)', contextEditPlaceholder: 'Bağlam uzunluğunu girin',
