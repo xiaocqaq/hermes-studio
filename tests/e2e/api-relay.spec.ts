@@ -10,15 +10,16 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/hermes/write-gate/pending**', route => route.fulfill({ json: { pending: [] } }))
 })
 
-test('opens the partner page below Usage and visits the website only from its action', async ({ page, context }) => {
+// This fork keeps the AK / API-relay partner entry out of every navigation
+// surface (see docs/harness/fork-customizations.md). The route itself stays
+// registered so a bookmarked URL still works — which is what these tests drive.
+test('keeps the partner page reachable by URL and visits the website only from its action', async ({ page, context }) => {
   await page.goto('/#/hermes/chat')
   const rail = page.locator('.studio-navigation-rail')
-  const relay = rail.getByRole('link', { name: 'API Relay', exact: true })
-  await expect(relay).toHaveAttribute('href', '#/hermes/api-relay')
-  expect(await relay.evaluate(el => el.previousElementSibling?.getAttribute('href'))).toBe('#/hermes/usage')
-  await relay.click()
+  await expect(rail.getByRole('link', { name: 'API Relay', exact: true })).toHaveCount(0)
+  await expect(page.locator('.studio-navigation-rail img[src="/relay-logo.png"]')).toHaveCount(0)
+  await page.goto('/#/hermes/api-relay')
   await expect(page).toHaveURL(/#\/hermes\/api-relay$/)
-  await expect(relay).toHaveAttribute('aria-current', 'page')
   expect(context.pages()).toHaveLength(1)
   await expect(page.locator('aside.sidebar, .session-list')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: 'Leading AI models, one gateway' })).toBeVisible()
@@ -55,22 +56,20 @@ test('opens the partner page below Usage and visits the website only from its ac
   await popup.close()
 })
 
-test('closes mobile navigation on the partner page and keeps the card within the viewport', async ({ page }) => {
+test('keeps the partner page off mobile navigation and within the viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
-  await page.goto('/#/hermes/chat')
-  await page.getByRole('button', { name: 'Menu', exact: true }).click()
-  const drawer = page.locator('.studio-mobile-drawer')
-  await drawer.getByRole('link', { name: 'API Relay', exact: true }).click()
-  await expect(page).toHaveURL(/#\/hermes\/api-relay$/)
-  await expect(drawer).not.toBeVisible()
+  await page.goto('/#/hermes/api-relay')
   await expect(page.locator('.api-relay-hero')).toBeVisible()
   await expect(page.getByRole('link', { name: 'View now', exact: true })).toBeInViewport()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-  await page.reload()
-  await expect(page.locator('.api-relay-hero')).toBeVisible()
+  const drawer = page.locator('.studio-mobile-drawer')
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await expect(drawer).toHaveCSS('width', '64px')
-  await expect(drawer.getByRole('link', { name: 'API Relay', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(drawer.getByRole('link', { name: 'API Relay', exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(drawer).not.toBeVisible()
+  await page.reload()
+  await expect(page.locator('.api-relay-hero')).toBeVisible()
 })
 
 test('shows the shared page loading surface until the partner logo is ready', async ({ page }) => {

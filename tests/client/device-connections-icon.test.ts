@@ -1,20 +1,49 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-// Keep the desktop rail on the same device metaphor. The compact sidebar no
-// longer lists connections in this fork (see the "remove ad buttons" commit),
-// so only the rail is asserted here.
-const path = 'M3 4h14a1 1 0 0 1 1 1v4M3 4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h9M7 16v4M5 20h7M15 9h6a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1M17 18h2'
-describe('Device connections icon', () => {
-  it('uses the monitor + phone outline in the navigation rail', () => {
-    const source = readFileSync('packages/client/src/components/layout/StudioNavigationRail.vue', 'utf8')
-    expect(source).toContain(path)
+// This fork keeps device connections, group chat, workflow and the API-relay
+// partner entry out of the navigation. Upstream 0.7.37 reintroduced all of them
+// in the new desktop navigation rail, so guard the rail explicitly.
+// See docs/harness/fork-customizations.md.
+const railPath = 'packages/client/src/components/layout/StudioNavigationRail.vue'
+const sidebarPath = 'packages/client/src/components/layout/PageSidebarNav.vue'
+
+function readRail(): string {
+  return readFileSync(railPath, 'utf8')
+}
+
+describe('Navigation surfaces', () => {
+  it('keeps device connections out of the navigation rail', () => {
+    const source = readRail()
+    expect(source).not.toContain("key: 'connections'")
+    expect(source).not.toContain('sidebar.connections')
   })
-  it('keeps the workflow branch icon distinct', () => {
-    const source = readFileSync('packages/client/src/components/layout/StudioNavigationRail.vue', 'utf8')
-    const workflow = source.split("key: 'workflow'")[1].split('\n')[0]
-    const connections = source.split("key: 'connections'")[1].split('\n')[0]
-    expect(workflow).not.toContain(path)
-    expect(connections).toContain(path)
+
+  it('keeps group chat and workflow out of the navigation rail', () => {
+    const source = readRail()
+    expect(source).not.toContain("key: 'group'")
+    expect(source).not.toContain("key: 'workflow'")
+    expect(source).not.toContain('sidebar.groupChat')
+    expect(source).not.toContain('sidebar.workflow')
+  })
+
+  it('keeps the API relay partner entry out of the navigation rail', () => {
+    const source = readRail()
+    expect(source).not.toContain('hermes.apiRelay')
+    expect(source).not.toContain('relay-logo.png')
+    expect(source).not.toContain('sidebar.apiRelay')
+  })
+
+  it('links the learning journey from both navigation surfaces', () => {
+    expect(readRail()).toContain("key: 'journey'")
+    const sidebar = readFileSync(sidebarPath, 'utf8')
+    expect(sidebar).toContain('openJourney')
+    expect(sidebar).toContain('sidebar.journey')
+  })
+
+  it('keeps the retired jobs and kanban tabs out of the page sidebar', () => {
+    const sidebar = readFileSync(sidebarPath, 'utf8')
+    expect(sidebar).not.toContain('sidebar.jobs')
+    expect(sidebar).not.toContain('sidebar.kanban')
   })
 })

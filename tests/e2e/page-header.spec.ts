@@ -37,7 +37,9 @@ test('replaces the shared header on navigation and leaves page content below it'
   await expect(sidebarControl).not.toHaveCSS('border-right-color', 'rgba(0, 0, 0, 0)')
   expect((await host.locator('.header-session-title').boundingBox())?.x).toBe(312)
 
-  for (const name of ['History', 'Workflow', 'Device connections', 'Agent Manager', 'Models', 'Settings', 'Chat']) {
+  // Workflow, group chat and device connections are reachable by URL only in
+  // this fork, so the rail loop covers the entries that are actually listed.
+  for (const name of ['History', 'Agent Manager', 'Models', 'Journey', 'Usage', 'Settings', 'Chat']) {
     const link = rail.getByRole('link', { name, exact: true })
     const href = await link.getAttribute('href')
     await link.click()
@@ -47,7 +49,7 @@ test('replaces the shared header on navigation and leaves page content below it'
     await expect(pageHeader).toBeVisible()
     await expect.poll(async () => (await pageHeader.boundingBox())?.y).toBe(0)
     await expect.poll(async () => (await pageHeader.boundingBox())?.height).toBe(40)
-    const hasSessionList = !['Device connections', 'Agent Manager', 'Models'].includes(name)
+    const hasSessionList = !['Agent Manager', 'Models', 'Journey', 'Usage'].includes(name)
     await expect(host.locator('.header-sidebar-control')).toHaveCount(hasSessionList ? 1 : 0)
     if (!hasSessionList) {
       await expect(page.locator('.chat-panel > .session-list')).toHaveCount(0)

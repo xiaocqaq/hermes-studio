@@ -39,11 +39,12 @@ test('keeps global navigation and account controls available when the conversati
   await expect(rail.getByRole('link', { name: 'History', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect.poll(async () => (await page.locator('.history-panel').boundingBox())?.y).toBe(40)
   expect((await page.locator('.history-panel').boundingBox())?.height).toBe(855)
-  await rail.getByRole('link', { name: 'Workflow', exact: true }).click()
-  await expect(page).toHaveURL(/#\/hermes\/workflow$/)
+  // Workflow and group chat are reachable by URL only in this fork; the rail no
+  // longer lists them (see docs/harness/fork-customizations.md).
+  await page.goto('/#/hermes/workflow')
   await expect.poll(async () => (await page.locator('.workflow-view').boundingBox())?.y).toBe(40)
   expect((await page.locator('.workflow-view').boundingBox())?.height).toBe(855)
-  await rail.getByRole('link', { name: 'Group Chat', exact: true }).click()
+  await page.goto('/#/hermes/group-chat')
   await expect(page.locator('.group-chat-view')).toHaveAttribute('aria-busy', 'false')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect.poll(async () => (await page.locator('.group-chat-panel').boundingBox())?.y).toBe(40)
@@ -77,7 +78,10 @@ test('opens the two-column mobile drawer and restores the desktop rail after res
   const drawer = page.locator('.studio-mobile-drawer')
   const rail = drawer.locator('.studio-navigation-rail')
   const sidebar = drawer.locator('.session-list')
-  await expect(rail.getByRole('link', { name: 'Group Chat', exact: true })).toBeVisible()
+  // Group chat, workflow and device connections are not part of the rail in
+  // this fork; assert the entries that do remain.
+  await expect(rail.getByRole('link', { name: 'Journey', exact: true })).toBeVisible()
+  await expect(rail.getByRole('link', { name: 'Group Chat', exact: true })).toHaveCount(0)
   await expect(sidebar.locator('.session-items')).toBeVisible()
   await expect(drawer).toHaveCSS('width', '351px')
   await expect(drawer).toHaveCSS('border-top-right-radius', '5px')
@@ -120,10 +124,12 @@ test('navigates through the shared mobile rail and closes it on leaf pages', asy
   await expect(page.locator('.models-view')).toBeVisible()
   await page.setViewportSize({ width: 390, height: 800 })
   const drawer = page.locator('.studio-mobile-drawer')
+  // Device connections is not part of this fork's rail; see
+  // docs/harness/fork-customizations.md.
   for (const [name, panel] of [
-    ['Device connections', '.connections-panel'],
     ['Agent Manager', '.agent-manager-panel'],
     ['Models', '.models-view'],
+    ['Journey', '.journey-view'],
     ['Usage', '.usage-view'],
   ]) {
     await page.getByRole('button', { name: 'Menu', exact: true }).click()
@@ -140,13 +146,16 @@ test('navigates through the shared mobile rail and closes it on leaf pages', asy
   await expect(drawer.locator('.session-list .session-items')).toBeVisible()
 })
 
-test('places Usage below Models as a standalone page with its own active navigation', async ({ page }) => {
+test('places Journey and Usage below Models as standalone pages with their own active navigation', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   await page.goto('/#/hermes/settings')
   const rail = page.locator('.studio-navigation-rail')
+  const journey = rail.getByRole('link', { name: 'Journey', exact: true })
+  await expect(journey).toHaveAttribute('href', '#/hermes/journey')
+  expect(await journey.evaluate(element => element.previousElementSibling?.getAttribute('href'))).toBe('#/hermes/models')
   const usage = rail.getByRole('link', { name: 'Usage', exact: true })
   await expect(usage).toHaveAttribute('href', '#/hermes/usage')
-  expect(await usage.evaluate(element => element.previousElementSibling?.getAttribute('href'))).toBe('#/hermes/models')
+  expect(await usage.evaluate(element => element.previousElementSibling?.getAttribute('href'))).toBe('#/hermes/journey')
   await expect(page.locator('aside.sidebar').getByRole('link', { name: 'Usage', exact: true })).toHaveCount(0)
   await usage.click()
   await expect(page.locator('.usage-view')).toBeVisible()
@@ -173,10 +182,10 @@ test('keeps both navigation levels while switching lists and settings on mobile'
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   const drawer = page.locator('.studio-mobile-drawer')
   const rail = drawer.locator('.studio-navigation-rail')
+  // Workflow and group chat are reachable by URL only in this fork, so the rail
+  // loop covers the entries that are actually listed.
   for (const [name, sidebar, route] of [
     ['History', '.session-list', '/hermes/history'],
-    ['Workflow', '.workflow-sidebar', '/hermes/workflow'],
-    ['Group Chat', '.room-sidebar', '/hermes/group-chat'],
     ['Settings', '.sidebar', '/hermes/settings'],
     ['Chat', '.session-list', '/hermes/chat'],
   ]) {
@@ -186,6 +195,18 @@ test('keeps both navigation levels while switching lists and settings on mobile'
     await expect.poll(async () => (await drawer.locator(sidebar).boundingBox())?.x).toBe(65)
     await expect(page.locator('.page-sidebar-account-btn')).toHaveCount(1)
     await expect(drawer).toBeInViewport()
+  }
+  for (const [name, sidebar, route] of [
+    ['Workflow', '.workflow-sidebar', '/hermes/workflow'],
+    ['Group Chat', '.room-sidebar', '/hermes/group-chat'],
+  ]) {
+    await page.goto(`/#${route}`)
+    await page.getByRole('button', { name: 'Menu', exact: true }).click()
+    await expect(drawer).toBeVisible()
+    await expect(drawer.locator(sidebar)).toBeVisible()
+    await expect(rail.getByRole('link', { name, exact: true })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(drawer).not.toBeVisible()
   }
   await rail.getByRole('link', { name: 'Settings', exact: true }).click()
   await drawer.locator('.sidebar').getByRole('link', { name: 'Theme', exact: true }).click()
