@@ -16,6 +16,15 @@
 *.ts text eol=lf
 *.vue text eol=lf
 
+# Node ESM scripts must keep LF. Vite/Vitest parses a local `.mjs` through
+# esbuild, and a CRLF checkout puts a stray \r at the end of the `#!` line of
+# scripts/server-module-boundaries.mjs; the whole module then fails to parse
+# with "SyntaxError: Invalid or unexpected token", which takes down every test
+# that imports it (tests/server/server-module-boundaries.test.ts and
+# tests/server/coding-agent-module-harness.test.ts) on Windows only.
+*.mjs text eol=lf
+*.cjs text eol=lf
+
 # Markdown too, because of packages/ekko-agent/docs/API.md: the API-doc harness
 # (packages/ekko-agent/scripts/api-doc-harness.mjs) rebuilds the block between
 # its two HTML markers with \n and compares it byte-for-byte against the file.
