@@ -123,21 +123,35 @@ fork 来的 PR 拿不到这些 secret，
 
 **⚠️ 升级会冲掉它。** `hermes_state.py` 属于 hermes-agent 包，`npm i -g` / pip 升级会整体替换该文件。`hermes-db-guard sweep` 每次跑都会检查补丁标记并自动重打，所以最坏情况是裸奔一个 sweep 周期（≤24h），不是永久失守。想立刻闭合就升级后跑 `install-db-guard.sh --patch-only`。
 
-### 1b. `patch-ekko-tool-timeout.py` — Ekko 聊天工具超时补丁
+### 1b. `patch-update-guard.sh` — update 路由的 super-admin 守卫
 
 **同样会被 `npm i -g hermes-web-ui` 冲掉**（它改的是 `dist/server/index.js`），所以并入 `install-db-guard.sh` 每次升级后重跑。
 
-背景：聊天生图（`image-gen` skill 跑 `studio-image-gen.mjs`）经由 `terminal_exec` 执行，而上游 `handle-ekko-agent-run.ts` 硬编码了 `toolContext.timeoutMs=120_000`，比 helper 自己的 10 分钟请求超时还短，于是 gpt-image-2 之类慢模型一冲到 120s 就被 SIGTERM，永远出不了图。
+背景：`POST /api/studio/update` 会执行 `npm i -g <pkg>@latest` 并自动重启服务。上游 0.7.28 的构建里这条路由**没有任何鉴权中间件**，而紧邻的 6 条 `/api/studio/update/preview*` 路由全都带 `requireSuperAdmin`。后果是任何已登录用户（含 `role=user`）都能触发就地升级并重启生产——2026-10-03 10:08 的生产被就地升级就是这么发生的。上游仓库后来补了守卫，但那次的构建没带上，所以就地打补丁。
 
-补丁把唯一的那处（`mcpServers` + `timeoutMs` + `signal` 形状，不碰群聊 bridge 的另一处）改成从环境变量取：
+**关键教训：不要硬编码 minified 标识符。** 旧版脚本把 `Xye` / `JR` 写死，重建一次 dist 变量名就变成 `rje` / `JH`，再变 `rje` / `Zw`。由于 unit 里写的是 `ExecStartPre=-...`（`-` 表示忽略失败），脚本每次都打印
 
 ```text
-timeoutMs:12e4  →  timeoutMs:Number(process.env.EKKO_TOOL_TIMEOUT_MS)||6e5
+ERROR: expected pattern not found — dist 结构变了，请人工核对 /usr/lib/node_modules/hermes-web-ui/dist/server/index.js
 ```
 
-默认 600000ms（10 分钟，和 helper / media 控制器默认一致）。调值：在 `/etc/hermes-webui.env` 写 `EKKO_TOOL_TIMEOUT_MS=900000` 后 `systemctl restart hermes-webui`。
+然后 exit 1，服务照常启动，**守卫静默失效**。`/var/log/hermes-webui-error.log` 里的这类 ERROR 就是这个。
 
-**仓库源码侧**：`packages/server/.../handle-ekko-agent-run.ts` 已改为读 Ekko `tools.executionTimeoutMs`（设置 → Tools），并把「拉取最新」并入会话菜单。上游若日后把这两处都修掉，本补丁（和 `--patch-only`）即可撤。
+现在的脚本从相邻的 preview 路由反推守卫标识符（`re.search(PREVIEW + r'([A-Za-z_$][\w$]*)\s*,')`），因此与变量名无关：
+
+- 已守卫 → `already guarded (<标识符>)`，exit 0
+- 未守卫 → 备份 `.bak.<ts>`，插回守卫，打印 `patched: <old> -> <new>`
+- 末尾 `node --check` 自检
+
+**仓库源码侧已修**：`packages/server/src/modules/studio/routes/update.ts` 现在自带 `requireSuperAdmin`，并由 `tests/server/update-route-guard.test.ts` 锁住（普通用户 / plain admin / 未认证全部 403，super_admin 放行，6 条 preview 路由同样校验）。所以用本仓库构建的 dist 跑这个脚本只会报 `already guarded`。把它留在 `--patch-only` 里是为了兜住「直接 `npm i -g` 装纯上游包」这条路径。
+
+### 1c. Ekko 聊天工具超时（已改为源码修复，不再需要运行期补丁）
+
+聊天生图（`image-gen` skill 跑 `studio-image-gen.mjs`）经由 `terminal_exec` 执行，而上游 `handle-ekko-agent-run.ts` 硬编码了 `toolContext.timeoutMs=120_000`，比 helper 自己的 10 分钟请求超时还短，于是 gpt-image-2 之类慢模型一冲到 120s 就被 SIGTERM，永远出不了图。`TerminalExecTool.execute` 的优先级是 `input.timeoutMs ?? context.timeoutMs ?? this.timeoutMs`，所以 context 那层会盖掉设置里的 `tools.executionTimeoutMs`。
+
+本仓库改为 `packages/server/.../handle-ekko-agent-run.ts` 里 `timeoutMs: resolveToolExecutionTimeoutMs(agent)`，读 Ekko 配置的 `tools.executionTimeoutMs`，读不到才回落 120000。生产 `/root/.hermes-web-ui/.ekko/config/config.json` 已设 `"executionTimeoutMs": 300000`。
+
+因为改的是 TypeScript 源码，构建产物里是编译期解析的结果（`timeoutMs:Xda(w)` 之类），**不需要**再给 minified bundle 打运行期补丁——原先的 `patch-ekko-tool-timeout.py` 已删除。
 
 ### 2. 6 小时只读体检 — `hermes-db-check.timer`
 
