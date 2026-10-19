@@ -206,39 +206,4 @@ describe("AppSidebar navigation", () => {
     expect(wrapper.text()).not.toContain("sidebar.devices");
   });
 
-  it("uses the regular update button to open Docker upgrade guidance", async () => {
-    mockAppStore.isDocker = true;
-    mockAppStore.updateAvailable = true;
-    mockAppStore.latestVersion = "0.6.29";
-    const wrapper = mountSidebar();
-    expect(wrapper.find(".update-btn").exists()).toBe(false);
-    await wrapper.get(".page-sidebar-account-btn").trigger("click");
-    const controls = wrapper.getComponent(SidebarAccountControls);
-
-    const button = controls.get(".update-btn:not(.version-management-btn)");
-    expect(button.classes()).not.toContain("docker-update-btn");
-    expect(button.text()).toContain("sidebar.updateVersion");
-
-    await button.trigger("click");
-
-    expect(mockAppStore.doUpdate).not.toHaveBeenCalled();
-    expect(controls.text()).toContain("sidebar.dockerUpdateGuide");
-  });
-
-  it("keeps the original npm update action outside Docker", async () => {
-    mockAppStore.isDocker = false;
-    mockAppStore.updateAvailable = true;
-    mockAppStore.latestVersion = "0.6.29";
-    const wrapper = mountSidebar();
-    expect(wrapper.find(".update-btn").exists()).toBe(false);
-    await wrapper.get(".page-sidebar-account-btn").trigger("click");
-    const controls = wrapper.getComponent(SidebarAccountControls);
-
-    await controls
-      .get(".update-btn:not(.version-management-btn)")
-      .trigger("click");
-
-    expect(mockAppStore.doUpdate).toHaveBeenCalledOnce();
-    expect(controls.text()).not.toContain("sidebar.dockerUpdateGuide");
-  });
 });

@@ -40,46 +40,6 @@ function handleNavClick(event: MouseEvent) {
     <nav class="hermes-config-nav" @click="handleNavClick">
       <RouteLinkItem
         class="hermes-config-nav-item"
-        :to="{ name: 'hermes.jobs' }"
-        :active="activeRoute === 'hermes.jobs'"
-      >
-        <svg
-          width="17"
-          height="17"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <rect x="3" y="4" width="18" height="18" rx="2" />
-          <path d="M16 2v4M8 2v4M3 10h18" />
-        </svg>
-        <span>{{ t("sidebar.jobs") }}</span>
-      </RouteLinkItem>
-      <RouteLinkItem
-        class="hermes-config-nav-item"
-        :to="{ name: 'hermes.kanban' }"
-        :active="activeRoute === 'hermes.kanban'"
-      >
-        <svg
-          width="17"
-          height="17"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linejoin="round"
-        >
-          <rect x="3" y="3" width="5" height="18" rx="1" />
-          <rect x="10" y="3" width="5" height="12" rx="1" />
-          <rect x="17" y="3" width="4" height="16" rx="1" />
-        </svg>
-        <span>{{ t("sidebar.kanban") }}</span>
-      </RouteLinkItem>
-      <RouteLinkItem
-        class="hermes-config-nav-item"
         :to="{ name: 'hermes.channels' }"
         :active="activeRoute === 'hermes.channels'"
       >

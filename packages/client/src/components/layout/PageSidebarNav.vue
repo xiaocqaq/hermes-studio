@@ -8,7 +8,7 @@ import { useSessionSearch } from '@/composables/useSessionSearch'
 import DesktopUpdateDownloadTab from './DesktopUpdateDownloadTab.vue'
 import { useNavigationRail } from '@/composables/useNavigationRail'
 
-type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'jobs' | 'kanban' | 'usage' | 'apiRelay' | 'group' | 'global' | 'workflow'
+type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'journey' | 'usage' | 'apiRelay' | 'group' | 'global' | 'workflow'
 
 const props = defineProps<{
   active: ActiveSection
@@ -47,12 +47,8 @@ function openModels() {
   void router.push({ name: 'hermes.models' })
 }
 
-function openJobs() {
-  void router.push({ name: 'hermes.jobs' })
-}
-
-function openKanban() {
-  void router.push({ name: 'hermes.kanban', query: { board: 'default' } })
+function openJourney() {
+  void router.push({ path: '/hermes/journey' })
 }
 
 function openUsage() {
@@ -167,10 +163,10 @@ function openWorkflow() {
       <button
         v-if="!hasNavigationRail"
         class="page-sidebar-tab"
-        :class="{ active: active === 'jobs' }"
+        :class="{ active: active === 'journey' }"
         type="button"
-        :aria-current="active === 'jobs' ? 'page' : undefined"
-        @click="openJobs"
+        :aria-current="active === 'journey' ? 'page' : undefined"
+        @click="openJourney"
       >
         <svg
           width="15"
@@ -183,35 +179,10 @@ function openWorkflow() {
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <rect x="3" y="4" width="18" height="18" rx="2" />
-          <path d="M16 2v4M8 2v4M3 10h18" />
+          <path d="M12 2v20M2 12h20" />
+          <circle cx="12" cy="12" r="4" />
         </svg>
-        <span>{{ t('sidebar.jobs') }}</span>
-      </button>
-      <button
-        v-if="!hasNavigationRail"
-        class="page-sidebar-tab"
-        :class="{ active: active === 'kanban' }"
-        type="button"
-        :aria-current="active === 'kanban' ? 'page' : undefined"
-        @click="openKanban"
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="3" y="3" width="5" height="18" rx="1" />
-          <rect x="10" y="3" width="5" height="12" rx="1" />
-          <rect x="17" y="3" width="4" height="16" rx="1" />
-        </svg>
-        <span>{{ t('sidebar.kanban') }}</span>
+        <span>{{ t('sidebar.journey') }}</span>
       </button>
       <button
         v-if="!hasNavigationRail"

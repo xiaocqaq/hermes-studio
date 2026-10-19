@@ -89,9 +89,6 @@ const RuntimeRestartPrompt = defineAsyncComponent(
 const ComputerUsePermissionPrompt = defineAsyncComponent(
   async () => (await import('@/components/ekko/ComputerUsePermissionPrompt.vue')).default,
 );
-const StudioAnnouncementPrompt = defineAsyncComponent(
-  async () => (await import('@/components/layout/StudioAnnouncementPrompt.vue')).default,
-);
 
 const {
   isDark,
@@ -432,9 +429,6 @@ useKeyboard();
           />
           <ComputerUsePermissionPrompt
             v-if="!isLoginPage && !isInviteOnlyPage && !isDesktopPetRoute && desktopBridge()?.computerUsePermissions?.claimReminder"
-          />
-          <StudioAnnouncementPrompt
-            v-if="!isLoginPage && !isInviteOnlyPage && !isDesktopPetRoute && !isStandaloneChatPage"
           />
         </NNotificationProvider>
       </NDialogProvider>

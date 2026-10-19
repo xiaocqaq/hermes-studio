@@ -21,8 +21,6 @@ describe("Hermes configuration navigation", () => {
     expect(app).toContain("if (showNavigationRail.value) return 64;");
 
     for (const name of [
-      "hermes.jobs",
-      "hermes.kanban",
       "hermes.channels",
       "hermes.skills",
       "hermes.plugins",
@@ -51,7 +49,6 @@ describe("Hermes configuration navigation", () => {
     expect(sharedSidebarStyles).toContain("padding: 8px 8px 12px");
 
     for (const label of [
-      "sidebar.kanban",
       "sidebar.channels",
       "sidebar.skills",
       "sidebar.plugins",
