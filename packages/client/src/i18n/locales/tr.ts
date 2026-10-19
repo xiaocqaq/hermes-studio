@@ -409,7 +409,7 @@ export default {
 
   sidebar: {
     resize: 'Kenar çubuğunu yeniden boyutlandır',
-    chat: 'Sohbet', backToChat: 'Geri', search: 'Ara', apiRelay: 'API geçidi', history: 'Geçmiş', jobs: 'İşler', kanban: 'Kanban',
+    chat: 'Sohbet', backToChat: 'Geri', search: 'Ara', apiRelay: 'API geçidi', history: 'Geçmiş',
     workflow: 'İş akışı', models: 'Modeller', profiles: 'Profiller', skills: 'Yetenekler', plugins: 'Eklentiler', mcp: 'MCP', petdex: 'Evcil hayvanlar',
     memory: 'Bellek', logs: 'Günlükler', usage: 'Kullanım', performance: 'Performans', journey: 'Yolculuk', skillsUsage: 'Yetenek kullanımı',
     channels: 'Kanallar', socialMessages: 'Mesaj gönder', gateways: 'Ağ geçitleri', terminal: 'Terminal', browser: 'Tarayıcı', singleChat: 'Sohbet',
