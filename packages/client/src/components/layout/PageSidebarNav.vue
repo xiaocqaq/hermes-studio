@@ -8,7 +8,7 @@ import { useSessionSearch } from '@/composables/useSessionSearch'
 import DesktopUpdateDownloadTab from './DesktopUpdateDownloadTab.vue'
 import { useNavigationRail } from '@/composables/useNavigationRail'
 
-type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'usage' | 'apiRelay' | 'group' | 'global' | 'workflow'
+type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'jobs' | 'kanban' | 'usage' | 'apiRelay' | 'group' | 'global' | 'workflow'
 
 const props = defineProps<{
   active: ActiveSection
@@ -68,11 +68,6 @@ function openGroupChat() {
 function openWorkflow() {
   if (props.active === 'workflow') return
   void router.push({ name: 'hermes.workflow' })
-}
-
-function openApiRelay() {
-  if (props.active === 'apiRelay') return
-  void router.push({ name: 'hermes.apiRelay' })
 }
 </script>
 

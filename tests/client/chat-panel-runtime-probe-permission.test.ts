@@ -11,43 +11,50 @@ import { describe, expect, it } from 'vitest'
 // access-denied and did nothing -- 6 of 7 production accounts affected.
 //
 // Upstream fixed it properly in #2805 by adding GET /api/agents/availability,
-// which carries no role guard, and by never redirecting from the catch. This
-// test pins that shape so the coupling cannot come back.
+// which carries no role guard, and by never redirecting from the catch. 0.7.37
+// then reshaped ChatPanel: the old `confirmNewChat` was split, and the guard now
+// lives in `submitNewChat`. This test pins the same shape at its new home so the
+// coupling cannot come back.
 describe('ChatPanel Hermes availability probe', () => {
   const chatPanel = readFileSync(
     'packages/client/src/components/hermes/chat/ChatPanel.vue',
     'utf8',
   )
 
-  const confirmNewChat = (() => {
-    const start = chatPanel.indexOf('async function confirmNewChat()')
+  // The Hermes-specific pre-flight guard inside submitNewChat: everything from
+  // the `newChatAgent.value === "hermes"` branch up to the next agent branch.
+  const hermesGuard = (() => {
+    const start = chatPanel.indexOf('if (newChatAgent.value === "hermes") {')
     expect(start).toBeGreaterThan(-1)
-    return chatPanel.slice(start, chatPanel.indexOf('\n}', start))
+    const end = chatPanel.indexOf('if (isNewChatExternalCodingAgent.value) {', start)
+    expect(end).toBeGreaterThan(start)
+    return chatPanel.slice(start, end)
   })()
 
   it('probes the unguarded availability endpoint, not the super_admin inventory', () => {
-    expect(confirmNewChat).toContain('fetchAgentAvailabilitySnapshot()')
+    expect(hermesGuard).toContain('fetchAgentAvailabilitySnapshot()')
     // runtime-versions is requireSuperAdmin; reaching for it here is the bug.
-    expect(confirmNewChat).not.toContain('fetchRuntimeVersionStatus')
+    expect(hermesGuard).not.toContain('fetchRuntimeVersionStatus')
   })
 
   it('never routes to the installer just because the probe failed', () => {
-    const probeIdx = confirmNewChat.indexOf('fetchAgentAvailabilitySnapshot')
-    const catchIdx = confirmNewChat.indexOf('catch', probeIdx)
-    const finallyIdx = confirmNewChat.indexOf('finally', catchIdx)
-    expect(catchIdx).toBeGreaterThan(-1)
-    expect(finallyIdx).toBeGreaterThan(catchIdx)
+    const probeIdx = hermesGuard.indexOf('fetchAgentAvailabilitySnapshot')
+    const catchIdx = hermesGuard.indexOf('catch', probeIdx)
+    expect(probeIdx).toBeGreaterThan(-1)
+    expect(catchIdx).toBeGreaterThan(probeIdx)
 
     // A probe failure carries no information about what is installed, so the
-    // catch must not navigate anywhere.
-    const catchBlock = confirmNewChat.slice(catchIdx, finallyIdx)
+    // catch must not navigate anywhere. It is the tail of the guard block, so
+    // everything from the catch onward is the failure path.
+    const catchBlock = hermesGuard.slice(catchIdx)
     expect(catchBlock).not.toContain('router.push')
+    expect(catchBlock).toContain('console.warn')
   })
 
   it('only sends a super_admin to the installer when the runtime is truly absent', () => {
-    expect(confirmNewChat).toContain('=== "not-installed"')
-    expect(confirmNewChat).toContain('isSuperAdmin.value')
+    expect(hermesGuard).toContain('=== "not-installed"')
+    expect(hermesGuard).toContain('isSuperAdmin.value')
     // Everyone else gets told, rather than bounced off a route they cannot open.
-    expect(confirmNewChat).toContain('codingAgents.installRequired')
+    expect(hermesGuard).toContain('codingAgents.installRequired')
   })
 })
