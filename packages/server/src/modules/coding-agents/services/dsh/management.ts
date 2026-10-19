@@ -73,7 +73,7 @@ export class DshManagement {
     const execution = this.host.commandExecution(input.installationCommand, ['--profile', prepared.profile, '--patch', prepared.patch, '--host', '127.0.0.1', '--port', '0', '--no-open'])
     const child = spawn(execution.command, execution.args, { cwd: input.sourceHome, detached: process.platform !== 'win32', windowsHide: true,
       ...(execution.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
-      env: { ...await this.host.commandEnv(), DSH_HOME: this.root, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+      env: { ...await this.host.commandEnv(), DSH_HOME: prepared.home || this.root, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
     try {
       const target = await new Promise<DshUiTarget>((resolve, reject) => {
@@ -92,18 +92,26 @@ export class DshManagement {
           const found = output.match(/STUDIO_DSH_UI_READY:(http:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+)/)
           if (!found || settled || probing) return
           probing = true
-          let stage = 'native authentication'
+          let stage = 'native connection'
           void (async () => {
             const endpoint = new URL(found[1]).origin
             const exchange = await fetch(found[1], { redirect: 'manual', signal: AbortSignal.timeout(5000) })
+            stage = 'native authentication'
             const cookie = exchange.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
-            if (exchange.status !== 303 || !cookie) throw new Error('Native authentication failed')
+            await exchange.body?.cancel()
+            if (exchange.status !== 303 || !cookie) { fail(`native authentication failed (HTTP ${exchange.status})`); return }
             stage = 'native frontend probe'
             const probe = await fetch(endpoint, { headers: { cookie }, signal: AbortSignal.timeout(5000) })
             if (!probe.ok) throw new Error('Native frontend unavailable')
             await probe.body?.cancel()
             if (!settled) { settled = true; clearTimeout(timeout); resolve({ endpoint, cookie, generation: randomUUID() }) }
-          })().catch(() => fail(`${stage} failed`))
+          })().catch(error => {
+            // A native process may announce its URL before plugin activation
+            // fails. A refused connection is not an authentication rejection.
+            const code = error?.cause?.code
+            const detail = ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code) ? `: ${code}` : ''
+            fail(`${stage} failed${detail}`)
+          })
         })
       })
       this.target = target; this.touch(target.generation); return target

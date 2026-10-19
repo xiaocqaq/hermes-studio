@@ -5,8 +5,10 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { isStoredSuperAdmin } from '@/api/client'
 import { useSessionSearch } from '@/composables/useSessionSearch'
+import DesktopUpdateDownloadTab from './DesktopUpdateDownloadTab.vue'
+import { useNavigationRail } from '@/composables/useNavigationRail'
 
-type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'group' | 'global' | 'workflow'
+type ActiveSection = 'chat' | 'history' | 'connections' | 'agents' | 'models' | 'usage' | 'apiRelay' | 'group' | 'global' | 'workflow'
 
 const props = defineProps<{
   active: ActiveSection
@@ -21,6 +23,7 @@ const { t } = useI18n()
 const router = useRouter()
 const { openSessionSearch } = useSessionSearch()
 const canManageAgents = computed(() => isStoredSuperAdmin())
+const hasNavigationRail = useNavigationRail()
 
 const primaryText = computed(() => props.primaryLabel || t('chat.newChat'))
 
@@ -52,6 +55,11 @@ function openKanban() {
   void router.push({ name: 'hermes.kanban', query: { board: 'default' } })
 }
 
+function openUsage() {
+  if (props.active === 'usage') return
+  void router.push({ name: 'hermes.usage' })
+}
+
 function openGroupChat() {
   if (props.active === 'group') return
   void router.push({ name: 'hermes.groupChat' })
@@ -61,46 +69,60 @@ function openWorkflow() {
   if (props.active === 'workflow') return
   void router.push({ name: 'hermes.workflow' })
 }
+
+function openApiRelay() {
+  if (props.active === 'apiRelay') return
+  void router.push({ name: 'hermes.apiRelay' })
+}
 </script>
 
 <template>
-  <div class="page-sidebar-nav">
+  <div class="page-sidebar-nav" :class="{ 'page-sidebar-nav--compact': hasNavigationRail }">
+    <DesktopUpdateDownloadTab />
     <div class="page-sidebar-tabs" role="tablist" aria-label="Chat actions">
-      <button
-        class="page-sidebar-tab"
-        type="button"
-        @click="emit('primary')"
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
+      <div class="page-sidebar-search-row">
+        <button
+          v-if="active !== 'history'"
+          class="page-sidebar-tab page-sidebar-primary"
+          type="button"
+          :title="primaryText"
+          :aria-label="primaryText"
+          @click="emit('primary')"
         >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        <span>{{ primaryText }}</span>
-      </button>
-      <button class="page-sidebar-tab" type="button" @click="openSessionSearch">
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-        <span>{{ t('sidebar.search') }}</span>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>{{ primaryText }}</span>
+        </button>
+        <button class="page-sidebar-tab page-sidebar-search" type="button" @click="openSessionSearch">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3.5-3.5" />
+          </svg>
+          <span>{{ t('sidebar.search') }}</span>
+        </button>
+        <div v-if="$slots.actions" class="page-sidebar-search-actions">
+          <slot name="actions" />
+        </div>
+      </div>
       <button
+        v-if="canManageAgents && !hasNavigationRail"
         class="page-sidebar-tab"
-        v-if="canManageAgents"
         :class="{ active: active === 'agents' }"
         type="button"
         :aria-current="active === 'agents' ? 'page' : undefined"
@@ -124,6 +146,7 @@ function openWorkflow() {
         <span>{{ t('sidebar.agentManager') }}</span>
       </button>
       <button
+        v-if="!hasNavigationRail"
         class="page-sidebar-tab"
         :class="{ active: active === 'models' }"
         type="button"
@@ -146,7 +169,14 @@ function openWorkflow() {
         </svg>
         <span>{{ t('sidebar.models') }}</span>
       </button>
-      <button class="page-sidebar-tab" type="button" @click="openJobs">
+      <button
+        v-if="!hasNavigationRail"
+        class="page-sidebar-tab"
+        :class="{ active: active === 'jobs' }"
+        type="button"
+        :aria-current="active === 'jobs' ? 'page' : undefined"
+        @click="openJobs"
+      >
         <svg
           width="15"
           height="15"
@@ -163,7 +193,14 @@ function openWorkflow() {
         </svg>
         <span>{{ t('sidebar.jobs') }}</span>
       </button>
-      <button class="page-sidebar-tab" type="button" @click="openKanban">
+      <button
+        v-if="!hasNavigationRail"
+        class="page-sidebar-tab"
+        :class="{ active: active === 'kanban' }"
+        type="button"
+        :aria-current="active === 'kanban' ? 'page' : undefined"
+        @click="openKanban"
+      >
         <svg
           width="15"
           height="15"
@@ -171,6 +208,7 @@ function openWorkflow() {
           fill="none"
           stroke="currentColor"
           stroke-width="1.8"
+          stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
         >
@@ -180,8 +218,33 @@ function openWorkflow() {
         </svg>
         <span>{{ t('sidebar.kanban') }}</span>
       </button>
+      <button
+        v-if="!hasNavigationRail"
+        class="page-sidebar-tab"
+        :class="{ active: active === 'usage' }"
+        type="button"
+        :aria-current="active === 'usage' ? 'page' : undefined"
+        @click="openUsage"
+      >
+        <svg
+          width="15"
+          height="15"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="3" y="12" width="4" height="9" rx="1" />
+          <rect x="10" y="7" width="4" height="14" rx="1" />
+          <rect x="17" y="3" width="4" height="18" rx="1" />
+        </svg>
+        <span>{{ t('sidebar.usage') }}</span>
+      </button>
     </div>
-    <div class="conversation-switch conversation-switch--four" role="tablist" aria-label="Conversation type">
+    <div v-if="!hasNavigationRail" class="conversation-switch conversation-switch--four" role="tablist" aria-label="Conversation type">
       <NTooltip trigger="hover" placement="top">
         <template #trigger>
           <button
@@ -272,14 +335,42 @@ function openWorkflow() {
 .page-sidebar-nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: calc(8px * var(--spacing-scale, 1));
 }
 
 .page-sidebar-tabs {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: calc(4px * var(--spacing-scale, 1));
 }
+
+.page-sidebar-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(4px * var(--spacing-scale, 1));
+  min-width: 0;
+
+  .page-sidebar-primary { flex: 0 0 100%; }
+  .page-sidebar-search { flex: 1; }
+}
+
+.page-sidebar-search-actions {
+  order: 2;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: calc(4px * var(--spacing-scale, 1));
+}
+
+.page-sidebar-nav--compact {
+  .page-sidebar-search-row { flex-wrap: nowrap; }
+  .page-sidebar-search { order: 0; flex: 1; background: rgba(var(--accent-primary-rgb), 0.05); }
+  .page-sidebar-primary { order: 1; flex: 0 0 32px; width: 32px; padding: 0; justify-content: center; }
+  .page-sidebar-primary span { display: none; }
+}
+
+.api-relay-logo { border-radius: var(--radius-component, 4px); }
 
 .page-sidebar-tab {
   width: 100%;
@@ -293,8 +384,8 @@ function openWorkflow() {
   flex-direction: row;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 7px 10px;
+  gap: calc(8px * var(--spacing-scale, 1));
+  padding: calc(7px * var(--spacing-scale, 1)) calc(10px * var(--spacing-scale, 1));
   cursor: pointer;
   transition:
     background-color $transition-fast,
@@ -309,8 +400,8 @@ function openWorkflow() {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 13px;
-    line-height: 18px;
+    font-size: calc(var(--font-size-base, 14px) * 13 / 14);
+    line-height: var(--line-height, calc(var(--font-size-base, 14px) * 18 / 14));
   }
 
   &:hover,
@@ -323,8 +414,8 @@ function openWorkflow() {
 .conversation-switch {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: 2px;
+  gap: calc(2px * var(--spacing-scale, 1));
+  padding: calc(2px * var(--spacing-scale, 1));
   border-radius: $radius-sm;
   background: rgba(var(--accent-primary-rgb), 0.05);
 }
@@ -338,7 +429,7 @@ function openWorkflow() {
   min-width: 0;
   height: 30px;
   border: none;
-  border-radius: 5px;
+  border-radius: var(--radius-component, 5px);
   background: transparent;
   color: $text-secondary;
   display: inline-flex;
@@ -358,14 +449,14 @@ function openWorkflow() {
   }
 
   &.active {
-    background: $bg-card;
+    background: var(--theme-card-bg, $bg-card);
     color: $text-primary;
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 }
 
 :global(.dark .conversation-switch--four .conversation-switch-tab.active) {
-  background: $bg-card-hover;
+  background: var(--theme-card-bg, $bg-card-hover);
   color: $accent-primary;
   box-shadow:
     inset 0 0 0 1px $border-color,

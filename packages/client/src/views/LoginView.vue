@@ -158,7 +158,7 @@ async function handlePasswordLogin() {
   max-width: calc(100vw - 32px);
   padding: 56px;
   box-sizing: border-box;
-  border: 1px solid var(--login-border);
+  border: var(--border-width, 1px) solid var(--login-border);
   border-radius: $radius-lg;
   background: var(--login-surface);
   box-shadow: 0 24px 64px rgba(7, 10, 18, 0.28);
@@ -167,7 +167,7 @@ async function handlePasswordLogin() {
   text-align: center;
 
   @media (max-width: $breakpoint-mobile) {
-    padding: 32px 24px;
+    padding: calc(32px * var(--spacing-scale, 1)) calc(24px * var(--spacing-scale, 1));
     --login-input-surface: rgba(255, 255, 255, 0.58);
     --login-input-surface-focus: rgba(255, 255, 255, 0.72);
     border-color: transparent;
@@ -199,31 +199,31 @@ async function handlePasswordLogin() {
 }
 
 .login-title {
-  font-size: 26px;
+  font-size: calc(var(--font-size-base, 14px) * 26 / 14);
   font-weight: 600;
   color: var(--login-text);
   margin: 0 0 10px;
 }
 
 .login-desc {
-  font-size: 14px;
+  font-size: calc(var(--font-size-base, 14px) * 14 / 14);
   color: var(--login-text-muted);
   margin: 0 0 12px;
-  line-height: 1.6;
+  line-height: var(--line-height, 1.6);
 }
 
 .login-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: calc(14px * var(--spacing-scale, 1));
 }
 
 .login-input {
   width: 100%;
-  padding: 14px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.54);
+  padding: calc(14px * var(--spacing-scale, 1)) calc(16px * var(--spacing-scale, 1));
+  border: var(--border-width, 1px) solid rgba(255, 255, 255, 0.54);
   border-radius: $radius-sm;
-  font-size: 16px;
+  font-size: calc(var(--font-size-base, 14px) * 16 / 14);
   color: var(--login-input-text);
   background: var(--login-input-surface);
   outline: none;
@@ -232,7 +232,7 @@ async function handlePasswordLogin() {
     border-color $transition-fast,
     box-shadow $transition-fast;
   box-sizing: border-box;
-  font-family: $font-code;
+  font-family: var(--font-code, $font-code);
 
   &::placeholder {
     color: var(--login-input-placeholder);
@@ -246,38 +246,38 @@ async function handlePasswordLogin() {
 }
 
 .login-error {
-  font-size: 13px;
+  font-size: calc(var(--font-size-base, 14px) * 13 / 14);
   color: #ffe0e0;
   text-align: start;
 }
 
 .login-lock-hint {
-  padding: 10px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: calc(10px * var(--spacing-scale, 1)) calc(12px * var(--spacing-scale, 1));
+  border: var(--border-width, 1px) solid rgba(255, 255, 255, 0.2);
   border-radius: $radius-sm;
   background: rgba(10, 14, 23, 0.5);
   color: var(--login-text-muted);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: calc(var(--font-size-base, 14px) * 12 / 14);
+  line-height: var(--line-height, 1.5);
   text-align: start;
 
   code {
     display: block;
     margin-top: 4px;
     color: var(--login-text);
-    font-family: $font-code;
+    font-family: var(--font-code, $font-code);
     word-break: break-all;
   }
 }
 
 .login-btn {
   width: 100%;
-  padding: 14px;
+  padding: calc(14px * var(--spacing-scale, 1));
   border: 1px solid rgba(255, 255, 255, 0.72);
   border-radius: $radius-sm;
   background: rgba(255, 255, 255, 0.9);
   color: var(--login-input-text);
-  font-size: 15px;
+  font-size: calc(var(--font-size-base, 14px) * 15 / 14);
   font-weight: 500;
   cursor: pointer;
   transition:
