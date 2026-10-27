@@ -25,6 +25,13 @@ export interface JevSettings {
   browserVerifyMinConfidence: number
   browserVerifyTimeoutMs: number
 
+  ekkoComputerUseMatchEnabled: boolean
+  ekkoComputerUseMatchCandidateLimit: number
+  ekkoComputerUseMatchMinConfidence: number
+  ekkoComputerUseMatchTimeoutMs: number
+  ekkoComputerUseVerifyEnabled: boolean
+  ekkoComputerUseVerifyMinConfidence: number
+  ekkoComputerUseVerifyTimeoutMs: number
   ekkoSkillsEnabled: boolean
   ekkoSkillsCandidateLimit: number
   ekkoSkillsMinConfidence: number

@@ -12,6 +12,7 @@ import UsageOverviewInsights from '@/components/hermes/usage/UsageOverviewInsigh
 import type { UsageStatsFilters } from '@/api/studio/sessions'
 import DailyTrend from '@/components/hermes/usage/DailyTrend.vue'
 import UsagePricing from '@/components/hermes/usage/UsagePricing.vue'
+import AgentBreakdown from '@/components/hermes/usage/AgentBreakdown.vue'
 
 const { t } = useI18n()
 const usageStore = useUsageStore()
@@ -119,6 +120,7 @@ onMounted(() => {
       <div v-if="usageStore.hasData && !usageStore.loadError" v-show="!usageStore.isLoading" class="overview-results">
         <StatCards />
         <DailyTrend />
+        <AgentBreakdown v-if="filters.origin !== 'external'" />
         <UsageOverviewInsights />
       </div>
 

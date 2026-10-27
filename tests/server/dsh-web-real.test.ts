@@ -155,20 +155,28 @@ it.skipIf(process.env.DSH_WEB_REAL !== '1')('runs a Web-installed bundle and cus
   const restoredOutside = join(root, 'restored-outside.txt')
   const children: ChildProcess[] = []
   const requests: any[] = []
+  const childRequests: any[] = []
   const steps: any[] = [
     { name: 'web_probe' },
     { name: 'write', args: { file_path: outside, content: 'outside sandbox' } },
     { name: 'bash', args: { description: 'Write a file outside the workspace', command: `printf shell-access > '${shellOutside.replaceAll("'", "'\"'\"'")}'` } },
     { name: 'subagent', args: { description: 'check inherited Web preset', prompt: 'CHILD_WEB_PRESET_PROBE' } },
-    { name: 'custom_preset_probe' },
-    { text: 'Child verified' },
     { name: 'restrict_policy' },
     { text: 'Parent verified' },
   ]
+  const childSteps: any[] = [{ name: 'custom_preset_probe' }, { text: 'Child verified' }]
+  let lateChildReply = false
   const server = createServer(async (req, res) => {
     let body = ''; for await (const chunk of req) body += chunk
-    requests.push(JSON.parse(body))
-    const step = steps.shift()
+    const request = JSON.parse(body)
+    requests.push(request)
+    // Newer delegation returns immediately, so parent/child model calls can
+    // interleave and a late child completion can wake the parent once more.
+    const isChild = request.input.some((item: any) => item.role === 'user' && Array.isArray(item.content)
+      && item.content.some((part: any) => part.type === 'input_text' && part.text.startsWith('CHILD_WEB_PRESET_PROBE')))
+    if (isChild) childRequests.push(request)
+    let step = (isChild ? childSteps : steps).shift()
+    if (!step && !isChild && !lateChildReply) { lateChildReply = true; step = { text: 'Parent verified' } }
     if (!step) { res.writeHead(500); res.end('Unexpected model request'); return }
     const id = `resp_${requests.length}`
     const item: any = step.name
@@ -252,12 +260,19 @@ it.skipIf(process.env.DSH_WEB_REAL !== '1')('runs a Web-installed bundle and cus
     expect(await readFile(shellOutside, 'utf8').catch(() => JSON.stringify(requests[3].input))).toBe('shell-access')
     expect(JSON.stringify(requests[1].input)).toContain('WEB_PROFILE_OVERRIDE')
     expect(requests.every(request => request.model === 'studio-test')).toBe(true)
-    expect(requests[4].tools.map((tool: any) => tool.name)).toContain('custom_preset_probe')
+    expect(childRequests).toHaveLength(2)
+    expect(childRequests[0].tools.map((tool: any) => tool.name)).toContain('custom_preset_probe')
     expect(JSON.stringify(requests[0])).toContain('CUSTOM_WEB_PRESET_SKILL')
-    expect(JSON.stringify(requests[5].input)).toContain('CUSTOM_PRESET_CHILD_TOOL')
+    expect(JSON.stringify(childRequests[1].input)).toContain('CUSTOM_PRESET_CHILD_TOOL')
     expect(rpc.notifications.some(message => message.method === 'session/request_permission')).toBe(false)
-    expect(JSON.stringify(requests[4].input)).toContain('CHILD_WEB_PRESET_PROBE')
     expect(steps).toEqual([])
+    expect(childSteps).toEqual([])
+    // Verify prompt completion itself persisted the turn, before close can flush.
+    const logs = await readdir(join(home, 'sessions'), { recursive: true })
+    const log = logs.find(path => path.includes(sessionId) && path.endsWith('.jsonl'))!
+    const persisted = await readFile(join(home, 'sessions', log), 'utf8')
+    expect(persisted).toContain('Parent verified')
+    expect(persisted.split('\n')[0], rpc.stderr).toContain('custom')
     await rpc.request('session/close', { sessionId }); const exited = once(rpc.child, 'close'); rpc.child.stdin!.end(); await exited
     // Another chat in the same Web profile sees its own selected tool set.
     const minimal = await start()
@@ -271,10 +286,6 @@ it.skipIf(process.env.DSH_WEB_REAL !== '1')('runs a Web-installed bundle and cus
     await minimal.request('session/close', { sessionId: minimalSession.sessionId })
     const minimalExit = once(minimal.child, 'close'); minimal.child.stdin!.end(); await minimalExit
     // A changed Web default must not silently change a restored session's tools.
-    const logs = await readdir(join(home, 'sessions'), { recursive: true })
-    const log = logs.find(path => path.includes(sessionId) && path.endsWith('.jsonl'))!
-    const persisted = await readFile(join(home, 'sessions', log), 'utf8')
-    expect(persisted.split('\n')[0], rpc.stderr).toContain('custom')
     await writeFile(join(sourceHome, 'settings.yaml'), settings.replace('default: standard', 'default: minimal'))
     if (release.registry) await writeFile(join(profile, 'cordis.patch.yml'), await readFile(join(profile, 'cordis.patch.yml'), 'utf8') + '\n- id: agent-preset-registry\n  config:\n    default: standard\n    selectedDefault: minimal\n')
     steps.push({ name: 'write', args: { file_path: restoredOutside, content: 'restored full access' } }, { text: 'Restored' })

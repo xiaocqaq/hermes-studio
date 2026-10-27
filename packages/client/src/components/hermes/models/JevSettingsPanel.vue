@@ -60,10 +60,10 @@ async function perform(action: 'save' | 'delete' | 'test') {
       const result = await testJevConnection(profile)
       if (!disposed) testResult.value = { model: result.model, durationMs: result.durationMs }
     } else {
-      const { groupSummaryReviewEnabled, groupSummaryReviewMinConfidence, groupSummaryRevisionEnabled, groupSummaryReviewTimeoutMs, workflowQualityEnabled, workflowQualityMinConfidence, workflowQualityTimeoutMs, groupMessageRoutingEnabled, groupHandoffReviewEnabled, groupLoopDetectionEnabled, groupMessageRoutingMinConfidence, groupMessageRoutingMode, groupMessageRoutingTimeoutMs, browserMatchEnabled, browserMatchCandidateLimit, browserMatchMinConfidence, browserMatchTimeoutMs, browserVerifyEnabled, browserVerifyMinConfidence, browserVerifyTimeoutMs, baseUrl, model, timeoutMs, ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled,
+      const { ekkoComputerUseMatchEnabled, ekkoComputerUseMatchCandidateLimit, ekkoComputerUseMatchMinConfidence, ekkoComputerUseMatchTimeoutMs, ekkoComputerUseVerifyEnabled, ekkoComputerUseVerifyMinConfidence, ekkoComputerUseVerifyTimeoutMs, groupSummaryReviewEnabled, groupSummaryReviewMinConfidence, groupSummaryRevisionEnabled, groupSummaryReviewTimeoutMs, workflowQualityEnabled, workflowQualityMinConfidence, workflowQualityTimeoutMs, groupMessageRoutingEnabled, groupHandoffReviewEnabled, groupLoopDetectionEnabled, groupMessageRoutingMinConfidence, groupMessageRoutingMode, groupMessageRoutingTimeoutMs, browserMatchEnabled, browserMatchCandidateLimit, browserMatchMinConfidence, browserMatchTimeoutMs, browserVerifyEnabled, browserVerifyMinConfidence, browserVerifyTimeoutMs, baseUrl, model, timeoutMs, ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled,
         ekkoMemoryWriteReviewEnabled, ekkoMemoryCandidateLimit, ekkoMemoryRecallMinConfidence, ekkoMemoryFilterMinConfidence, ekkoMemoryMinConfidence, ekkoMemoryTimeoutMs } = settings.value
       const result = action === 'delete' ? await deleteJevSettings(profile)
-        : await saveJevSettings(profile, { groupSummaryReviewEnabled, groupSummaryReviewMinConfidence, groupSummaryRevisionEnabled, groupSummaryReviewTimeoutMs, workflowQualityEnabled, workflowQualityMinConfidence, workflowQualityTimeoutMs, groupMessageRoutingEnabled, groupHandoffReviewEnabled, groupLoopDetectionEnabled, groupMessageRoutingMinConfidence, groupMessageRoutingMode, groupMessageRoutingTimeoutMs, browserMatchEnabled, browserMatchCandidateLimit, browserMatchMinConfidence, browserMatchTimeoutMs, browserVerifyEnabled, browserVerifyMinConfidence, browserVerifyTimeoutMs, baseUrl, model, timeoutMs, ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled,
+        : await saveJevSettings(profile, { ekkoComputerUseMatchEnabled, ekkoComputerUseMatchCandidateLimit, ekkoComputerUseMatchMinConfidence, ekkoComputerUseMatchTimeoutMs, ekkoComputerUseVerifyEnabled, ekkoComputerUseVerifyMinConfidence, ekkoComputerUseVerifyTimeoutMs, groupSummaryReviewEnabled, groupSummaryReviewMinConfidence, groupSummaryRevisionEnabled, groupSummaryReviewTimeoutMs, workflowQualityEnabled, workflowQualityMinConfidence, workflowQualityTimeoutMs, groupMessageRoutingEnabled, groupHandoffReviewEnabled, groupLoopDetectionEnabled, groupMessageRoutingMinConfidence, groupMessageRoutingMode, groupMessageRoutingTimeoutMs, browserMatchEnabled, browserMatchCandidateLimit, browserMatchMinConfidence, browserMatchTimeoutMs, browserVerifyEnabled, browserVerifyMinConfidence, browserVerifyTimeoutMs, baseUrl, model, timeoutMs, ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled,
           ekkoMemoryWriteReviewEnabled, ekkoMemoryCandidateLimit, ekkoMemoryRecallMinConfidence, ekkoMemoryFilterMinConfidence, ekkoMemoryMinConfidence, ekkoMemoryTimeoutMs,
           ...(apiKey.value.trim() ? { apiKey: apiKey.value.trim() } : {}) })
       if (!disposed) { settings.value = result; apiKey.value = ''; message.success(t(action === 'delete' ? 'jev.deleted' : 'common.saved')); catalogChanged() }
@@ -184,6 +184,46 @@ usePageLoadingTask(() => loading.value)
             <section class="config-card"><header class="card-header"><h5 class="card-title">{{ t('jev.groupSummaryTitle') }}</h5><NSwitch v-model:value="settings.groupSummaryReviewEnabled" :aria-label="t('jev.groupSummaryReviewEnabled')" /></header><p class="card-hint">{{ t(summaryStatus) }}</p><div class="settings-rows"><SettingRow :label="t('jev.groupSummaryRevisionEnabled')" :hint="t('jev.groupSummaryRevisionHint')"><NSwitch v-model:value="settings.groupSummaryRevisionEnabled" :aria-label="t('jev.groupSummaryRevisionEnabled')" /></SettingRow><SettingRow :label="t('jev.groupSummaryReviewMinConfidence')" :hint="t('jev.groupSummaryReviewMinConfidenceHint')"><NInputNumber :value="settings.groupSummaryReviewMinConfidence" @update:value="value => { if (value !== null) settings!.groupSummaryReviewMinConfidence = value }" size="small" class="input-md" :min="0.5" :max="1" :step="0.05" :input-props="{ 'aria-label': t('jev.groupSummaryReviewMinConfidence') }" /></SettingRow><SettingRow :label="t('jev.groupSummaryReviewTimeout')" :hint="t('jev.groupSummaryReviewTimeoutHint')"><NInputNumber :value="settings.groupSummaryReviewTimeoutMs" @update:value="value => { if (value !== null) settings!.groupSummaryReviewTimeoutMs = value }" size="small" class="input-md" :min="100" :max="30000" :step="100" :precision="0" :input-props="{ 'aria-label': t('jev.groupSummaryReviewTimeout') }" /></SettingRow></div></section>
           </div>
         </section>
+        <section class="config-group" :aria-label="t('jev.computerUseAutomation')">
+          <h4 class="group-title">{{ t('jev.computerUseAutomation') }}</h4>
+          <p class="section-hint">{{ t('jev.computerUseAutomationHint') }}</p>
+          <div class="config-grid">
+            <section class="config-card" data-theme-surface="card" :aria-label="t('jev.computerUseMatchEnabled')">
+              <header class="card-header">
+                <h5 class="card-title">{{ t('jev.computerUseMatchEnabled') }}</h5>
+                <NSwitch v-model:value="settings.ekkoComputerUseMatchEnabled" :aria-label="t('jev.computerUseMatchEnabled')" />
+              </header>
+              <p class="card-hint">{{ t('jev.computerUseMatchHint') }}</p>
+              <div class="settings-rows">
+                <SettingRow :label="t('jev.computerUseMatchCandidateLimit')">
+                  <NInputNumber :value="settings.ekkoComputerUseMatchCandidateLimit" @update:value="value => { if (value !== null) settings!.ekkoComputerUseMatchCandidateLimit = value }" size="small" class="input-md" :min="1" :max="50" :precision="0" :input-props="{ 'aria-label': t('jev.computerUseMatchCandidateLimit') }" />
+                </SettingRow>
+                <SettingRow :label="t('jev.computerUseMatchMinConfidence')">
+                  <NInputNumber :value="settings.ekkoComputerUseMatchMinConfidence" @update:value="value => { if (value !== null) settings!.ekkoComputerUseMatchMinConfidence = value }" size="small" class="input-md" :min="0.5" :max="1" :step="0.05" :input-props="{ 'aria-label': t('jev.computerUseMatchMinConfidence') }" />
+                </SettingRow>
+                <SettingRow :label="t('jev.computerUseMatchTimeoutMs')">
+                  <NInputNumber :value="settings.ekkoComputerUseMatchTimeoutMs" @update:value="value => { if (value !== null) settings!.ekkoComputerUseMatchTimeoutMs = value }" size="small" class="input-md" :min="100" :max="30000" :step="100" :precision="0" :input-props="{ 'aria-label': t('jev.computerUseMatchTimeoutMs') }" />
+                </SettingRow>
+              </div>
+            </section>
+            <section class="config-card" data-theme-surface="card" :aria-label="t('jev.computerUseVerifyEnabled')">
+              <header class="card-header">
+                <h5 class="card-title">{{ t('jev.computerUseVerifyEnabled') }}</h5>
+                <NSwitch v-model:value="settings.ekkoComputerUseVerifyEnabled" :aria-label="t('jev.computerUseVerifyEnabled')" />
+              </header>
+              <p class="card-hint">{{ t('jev.computerUseVerifyHint') }}</p>
+              <div class="settings-rows">
+                <SettingRow :label="t('jev.computerUseVerifyMinConfidence')">
+                  <NInputNumber :value="settings.ekkoComputerUseVerifyMinConfidence" @update:value="value => { if (value !== null) settings!.ekkoComputerUseVerifyMinConfidence = value }" size="small" class="input-md" :min="0.5" :max="1" :step="0.05" :input-props="{ 'aria-label': t('jev.computerUseVerifyMinConfidence') }" />
+                </SettingRow>
+                <SettingRow :label="t('jev.computerUseVerifyTimeoutMs')">
+                  <NInputNumber :value="settings.ekkoComputerUseVerifyTimeoutMs" @update:value="value => { if (value !== null) settings!.ekkoComputerUseVerifyTimeoutMs = value }" size="small" class="input-md" :min="100" :max="30000" :step="100" :precision="0" :input-props="{ 'aria-label': t('jev.computerUseVerifyTimeoutMs') }" />
+                </SettingRow>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <section class="config-group" :aria-label="t('jev.browserAutomation')">
           <h4 class="group-title">{{ t('jev.browserAutomation') }}</h4>
           <p class="section-hint">{{ t('jev.browserAutomationHint') }}</p>

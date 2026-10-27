@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { stopRemoteBrowserRelay } from '@/composables/useRemoteBrowserRelay'
+import { deploymentUrl } from '@/utils/deployment-url'
 import {
   computed,
   defineAsyncComponent,
@@ -102,6 +104,7 @@ const naiveLocale = computed(() => naiveLocaleFor(locale.value));
 const naiveRtl = computed(() => naiveRtlFor(locale.value));
 const appStore = useAppStore();
 const profilesStore = useProfilesStore();
+watch(() => profilesStore.activeProfileName, () => { void stopRemoteBrowserRelay() });
 const route = useRoute();
 const { sessionSearchOpen } = useSessionSearch();
 
@@ -111,6 +114,7 @@ const themeOverrides = computed(() =>
 const naiveTheme = computed(() => (isDark.value ? darkTheme : null));
 
 const isLoginPage = computed(() => route.name === "login");
+watch(isLoginPage, login => { if (login) void stopRemoteBrowserRelay() });
 watchServerTtsSettingsHydration({
   isLoginPage: () => isLoginPage.value,
   activeProfileName: () => profilesStore.activeProfileName,
@@ -383,7 +387,7 @@ useKeyboard();
                   @click="handleMobileMenuClick"
                 >
                   <img
-                    src="/logo.png"
+                    :src="deploymentUrl('/logo.png')"
                     alt="Menu"
                     style="width: 24px; height: 24px"
                   />
@@ -544,7 +548,6 @@ useKeyboard();
 }
 
 .app-shell--navigation-rail {
-  --studio-header-height: 40px;
   --studio-header-inset: #{$navigation-rail-width};
   --studio-content-gutter: 5px;
   --studio-content-radius: #{$radius-lg};
@@ -595,6 +598,7 @@ useKeyboard();
       min-height: 0;
       margin: 0;
       padding: 0 calc(16px * var(--spacing-scale, 1));
+      padding-right: var(--studio-header-controls-gap, calc(16px * var(--spacing-scale, 1))); // rtl-physical: the native device and window controls stay on the physical right in every locale.
       border: 0;
       background: transparent;
       overflow-x: auto;
@@ -673,6 +677,7 @@ useKeyboard();
   // Three 46px window buttons.
   &.desktop-platform-win32 .studio-page-header,
   &.desktop-platform-linux .studio-page-header {
+    --studio-header-controls-gap: calc(8px * var(--spacing-scale, 1));
     padding-right: var(--desktop-window-controls-width); // rtl-physical: window controls stay on the physical right in every locale.
   }
 

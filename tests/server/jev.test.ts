@@ -6,6 +6,7 @@ import { evaluateJev, getJevRuntimeConfig, choice, score, noul } from '../../pac
 import { getJevSettings, saveJevSettings, deleteJevSettings, readJevCredentials } from '../../packages/server/src/modules/studio/services/jev/settings'
 import { getSettings, saveSettings, evaluate } from '../../packages/server/src/modules/studio/controllers/jev'
 
+const computerDefaults = { ekkoComputerUseMatchEnabled: false, ekkoComputerUseMatchCandidateLimit: 20, ekkoComputerUseMatchMinConfidence: 0.8, ekkoComputerUseMatchTimeoutMs: 3000, ekkoComputerUseVerifyEnabled: false, ekkoComputerUseVerifyMinConfidence: 0.8, ekkoComputerUseVerifyTimeoutMs: 3000 }
 const skillsDefaults = { ekkoSkillsEnabled: false, ekkoSkillsCandidateLimit: 20, ekkoSkillsMinConfidence: 0.8, ekkoSkillsTimeoutMs: 3000 }
 const directory = join(config.appHome, 'models', 'jev')
 const upstream = vi.fn<typeof fetch>()
@@ -31,6 +32,32 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('JEV settings', () => {
+  it('round-trips Computer Use options, maps runtime snapshots, and isolates Profiles', async () => {
+    const options = { ekkoComputerUseMatchEnabled: true, ekkoComputerUseMatchCandidateLimit: 7,
+      ekkoComputerUseMatchMinConfidence: .9, ekkoComputerUseMatchTimeoutMs: 1200,
+      ekkoComputerUseVerifyEnabled: true, ekkoComputerUseVerifyMinConfidence: .95, ekkoComputerUseVerifyTimeoutMs: 1600 }
+    expect(await getJevSettings('work')).toMatchObject(computerDefaults)
+    await saveJevSettings('work', { ...options, apiKey: 'work-key' })
+    expect(await getJevSettings('work')).toMatchObject(options)
+    expect(await getJevRuntimeConfig('work')).toMatchObject({ enabled: true, computerUseMatchEnabled: true,
+      computerUseMatchCandidateLimit: 7, computerUseMatchMinConfidence: .9, computerUseMatchTimeoutMs: 1200,
+      computerUseVerifyEnabled: true, computerUseVerifyMinConfidence: .95, computerUseVerifyTimeoutMs: 1600 })
+    await saveJevSettings('work', { ekkoComputerUseMatchEnabled: false, ekkoComputerUseVerifyEnabled: false })
+    expect(await getJevRuntimeConfig('work')).toMatchObject({ computerUseMatchEnabled: false, computerUseVerifyEnabled: false, computerUseMatchCandidateLimit: 7 })
+    expect(await getJevSettings('other')).toMatchObject(computerDefaults)
+    expect(await deleteJevSettings('work')).toMatchObject(computerDefaults)
+  })
+
+  it.each([
+    { ekkoComputerUseMatchEnabled: 'true' }, { ekkoComputerUseVerifyEnabled: null },
+    { ekkoComputerUseMatchCandidateLimit: 0 }, { ekkoComputerUseMatchCandidateLimit: 51 },
+    { ekkoComputerUseMatchMinConfidence: .49 }, { ekkoComputerUseVerifyMinConfidence: 1.01 },
+    { ekkoComputerUseMatchTimeoutMs: 99 }, { ekkoComputerUseVerifyTimeoutMs: 30001 },
+  ])('rejects invalid Computer Use settings %j', async input => {
+    await expect(saveJevSettings('work', input)).rejects.toMatchObject({ code: 'jev_invalid_request' })
+  })
+
+
   it('round-trips all group and workflow fields, explicit false and partial saves per Profile', async () => {
     const options = { groupSummaryReviewEnabled: true, groupSummaryReviewMinConfidence: .9,
       groupSummaryRevisionEnabled: true, groupSummaryReviewTimeoutMs: 1200,
@@ -117,6 +144,7 @@ describe('JEV settings', () => {
     await saveJevSettings('research', { apiKey: 'research-key', model: 'jev-research' })
     expect(await getJevRuntimeConfig('research')).toMatchObject({ enabled: true, apiKey: 'research-key', model: 'jev-research' })
     expect(await getJevRuntimeConfig('other')).toEqual({
+      computerUseMatchEnabled: computerDefaults.ekkoComputerUseMatchEnabled, computerUseMatchCandidateLimit: computerDefaults.ekkoComputerUseMatchCandidateLimit, computerUseMatchMinConfidence: computerDefaults.ekkoComputerUseMatchMinConfidence, computerUseMatchTimeoutMs: computerDefaults.ekkoComputerUseMatchTimeoutMs, computerUseVerifyEnabled: computerDefaults.ekkoComputerUseVerifyEnabled, computerUseVerifyMinConfidence: computerDefaults.ekkoComputerUseVerifyMinConfidence, computerUseVerifyTimeoutMs: computerDefaults.ekkoComputerUseVerifyTimeoutMs,
       skillsEnabled: false, skillsCandidateLimit: 20, skillsMinConfidence: 0.8, skillsTimeoutMs: 3000,
       enabled: false, memoryEnabled: false, memoryKindRoutingEnabled: true, memoryRelevanceFilterEnabled: true, memoryRerankEnabled: true, memoryWriteReviewEnabled: true, memoryCandidateLimit: 20, memoryRecallMinConfidence: 0.5, memoryFilterMinConfidence: 0.8, memoryMinConfidence: 0.8, memoryTimeoutMs: 3000, apiKey: '', baseUrl: 'https://api.typesafe.ai', model: 'jev-latest', timeoutMs: 10000,
     })
@@ -124,7 +152,7 @@ describe('JEV settings', () => {
   })
   it('isolates profiles and returns only credential presence', async () => {
     const saved = await saveJevSettings('research', { apiKey: 'private-key', model: 'jev-research' })
-    expect(saved).toEqual({ groupMessageRoutingEnabled: false, groupHandoffReviewEnabled: true, groupLoopDetectionEnabled: true, groupMessageRoutingMinConfidence: 0.9, groupMessageRoutingMode: 'suggest', groupMessageRoutingTimeoutMs: 1500, workflowQualityEnabled: false, workflowQualityMinConfidence: 0.8, workflowQualityTimeoutMs: 5000, groupSummaryReviewEnabled: false, groupSummaryReviewMinConfidence: 0.8, groupSummaryRevisionEnabled: false, groupSummaryReviewTimeoutMs: 3000, browserMatchEnabled: false, browserMatchCandidateLimit: 20, browserMatchMinConfidence: 0.8, browserMatchTimeoutMs: 3000, browserVerifyEnabled: false, browserVerifyMinConfidence: 0.8, browserVerifyTimeoutMs: 3000, ...skillsDefaults, baseUrl: 'https://api.typesafe.ai', model: 'jev-research', timeoutMs: 10000, hasApiKey: true, ekkoMemoryEnabled: false, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true, ekkoMemoryCandidateLimit: 20, ekkoMemoryRecallMinConfidence: 0.5, ekkoMemoryFilterMinConfidence: 0.8, ekkoMemoryMinConfidence: 0.8, ekkoMemoryTimeoutMs: 3000 })
+    expect(saved).toEqual({ ...computerDefaults, groupMessageRoutingEnabled: false, groupHandoffReviewEnabled: true, groupLoopDetectionEnabled: true, groupMessageRoutingMinConfidence: 0.9, groupMessageRoutingMode: 'suggest', groupMessageRoutingTimeoutMs: 1500, workflowQualityEnabled: false, workflowQualityMinConfidence: 0.8, workflowQualityTimeoutMs: 5000, groupSummaryReviewEnabled: false, groupSummaryReviewMinConfidence: 0.8, groupSummaryRevisionEnabled: false, groupSummaryReviewTimeoutMs: 3000, browserMatchEnabled: false, browserMatchCandidateLimit: 20, browserMatchMinConfidence: 0.8, browserMatchTimeoutMs: 3000, browserVerifyEnabled: false, browserVerifyMinConfidence: 0.8, browserVerifyTimeoutMs: 3000, ...skillsDefaults, baseUrl: 'https://api.typesafe.ai', model: 'jev-research', timeoutMs: 10000, hasApiKey: true, ekkoMemoryEnabled: false, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true, ekkoMemoryCandidateLimit: 20, ekkoMemoryRecallMinConfidence: 0.5, ekkoMemoryFilterMinConfidence: 0.8, ekkoMemoryMinConfidence: 0.8, ekkoMemoryTimeoutMs: 3000 })
     expect(JSON.stringify(await getJevSettings('research'))).not.toContain('private-key')
     expect(await getJevSettings('default')).toMatchObject({ model: 'jev-latest', hasApiKey: false })
     const [file] = await readdir(directory)
@@ -219,17 +247,44 @@ describe('JEV settings', () => {
 })
 
 describe('shared JEV client', () => {
-  it('batches all three primitives with selected profile credentials and preserves results', async () => {
+  it.each([
+    ['https://jev.example.test/', 'https://jev.example.test'],
+    ['https://jev.example.test/v1', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/systemone', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/systemone/', 'https://jev.example.test'],
+    ['https://jev.example.test/gateway', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/gateway/v1/', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/gateway/v1/systemone/', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/v1/systemone/gateway/', 'https://jev.example.test/v1/systemone/gateway'],
+  ])('batches typed questions with profile credentials at %s', async (baseUrl, root) => {
     await saveJevSettings('default', { apiKey: 'default-key' })
-    await saveJevSettings('research', { apiKey: 'research-key', model: 'jev-research', baseUrl: 'https://jev.example.test/' })
+    await saveJevSettings('research', { apiKey: 'research-key', model: 'jev-research', baseUrl })
     const result = await evaluateJev('research', { state: { message: 'billing issue' }, questions })
     expect(result).toEqual(response)
     expect(upstream).toHaveBeenCalledTimes(1)
     const [url, init] = upstream.mock.calls[0]
-    expect(url).toBe('https://jev.example.test/v1/systemone')
+    expect(url).toBe(`${root}/v1/systemone`)
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer research-key')
     expect(init?.redirect).toBe('error')
     expect(JSON.parse(init!.body as string)).toEqual({ state: { message: 'billing issue' }, questions, model: 'jev-research' })
+    expect(await getJevSettings('research')).toMatchObject({ baseUrl: root })
+    expect(await getJevRuntimeConfig('research')).toMatchObject({ baseUrl: root })
+  })
+
+  it('normalizes an existing saved endpoint when reading settings without rewriting the file', async () => {
+    await saveJevSettings('research', { apiKey: 'research-key' })
+    const [file] = await readdir(directory)
+    const path = join(directory, file)
+    const saved = JSON.parse(await readFile(path, 'utf8'))
+    saved.baseUrl = 'https://jev.example.test/gateway/v1/systemone/'
+    const original = JSON.stringify(saved)
+    await writeFile(path, original)
+
+    await expect(evaluateJev('research', { state: null, questions })).resolves.toEqual(response)
+    expect(upstream.mock.calls[0][0]).toBe('https://jev.example.test/gateway/v1/systemone')
+    expect(await getJevRuntimeConfig('research')).toMatchObject({ baseUrl: 'https://jev.example.test/gateway' })
+    expect(await readFile(path, 'utf8')).toBe(original)
   })
 
   it('does not fall back to another profile or the process environment', async () => {
@@ -250,10 +305,10 @@ describe('shared JEV client', () => {
     expect(JSON.parse(init!.body as string).model).toBe('jev-override')
   })
 
-  it.each([401, 403, 429, 500])('sanitizes provider HTTP %i errors without retries', async status => {
+  it.each([400, 401, 403, 404, 429, 500, 503])('sanitizes provider HTTP %i errors without retries', async status => {
     await saveJevSettings('research', { apiKey: 'private-key' })
     upstream.mockResolvedValue(Response.json({ error: 'private-key and private-state' }, { status }))
-    const code = [401, 403].includes(status) ? 'jev_auth_failed' : status === 429 ? 'jev_rate_limited' : 'jev_provider_error'
+    const code = [401, 403].includes(status) ? 'jev_auth_failed' : status === 404 ? 'jev_endpoint_not_found' : status === 429 ? 'jev_rate_limited' : 'jev_provider_error'
     await expect(evaluateJev('research', { state: 'private-state', questions })).rejects.toMatchObject({ status: 502, code, message: `JEV provider returned HTTP ${status}` })
     expect(upstream).toHaveBeenCalledTimes(1)
   })

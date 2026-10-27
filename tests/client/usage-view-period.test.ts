@@ -92,9 +92,9 @@ describe('UsageView period selector', () => {
   })
 
   it('loads the default 30-day period on mount', async () => {
-    mount(UsageView)
+    const wrapper = mount(UsageView)
     await flushPromises()
-
+    expect(wrapper.find('.agent-breakdown-stub').exists()).toBe(true)
     expect(mockUsageStore.loadSessions).toHaveBeenCalledWith(30)
   })
 
@@ -102,6 +102,7 @@ describe('UsageView period selector', () => {
     routeState.query = { origin: 'external' }
     const wrapper = mount(UsageView)
     await flushPromises()
+    expect(wrapper.find('.agent-breakdown-stub').exists()).toBe(false)
     expect(mockUsageStore.loadSessions).toHaveBeenCalledWith(30, { origin: 'external' })
     await wrapper.find('.refresh-button').trigger('click')
     expect(mockUsageStore.loadSessions).toHaveBeenLastCalledWith(30, { origin: 'external' })

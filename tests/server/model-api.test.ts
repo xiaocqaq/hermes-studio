@@ -44,6 +44,40 @@ beforeEach(() => {
 })
 
 describe('public Responses model API', () => {
+  it('filters the directory to the exact key model IDs, including nested and escaped IDs', async () => {
+    mocks.groups.mockResolvedValue([
+      { provider: 'p', models: ['a', 'vendor/b', 'future'] },
+      { provider: 'custom:a/b', models: ['c'] },
+    ])
+    const allowed = ['p/vendor/b', 'custom:a%2Fb/c']
+    expect((await listApiModels(['default'], allowed)).data.map(model => model.id)).toEqual(allowed)
+    expect((await listApiModels(['default'], [])).data).toEqual([])
+    expect((await listApiModels(['default'])).data).toHaveLength(4)
+  })
+
+  it.each([false, true])('rejects models outside the key scope before provider work for stream=%s', async stream => {
+    for (const allowedModels of [[], ['another/model']]) {
+      await expect(prepareModelResponse({ profiles: ['default'], allowedModels, body: body({ stream }), signal: new AbortController().signal }))
+        .rejects.toMatchObject({ status: 404, param: 'model' })
+    }
+    expect(mocks.groups).not.toHaveBeenCalled()
+    expect(mocks.runtime).not.toHaveBeenCalled()
+    expect(mocks.createClient).not.toHaveBeenCalled()
+    expect(mocks.fetch).not.toHaveBeenCalled()
+    expect(mocks.record).not.toHaveBeenCalled()
+  })
+
+  it('allowed models remain subject to current catalog and Profile access', async () => {
+    const allowedModels = ['deepseek/deepseek-reasoner']
+    const request = await prepareModelResponse({ profiles: ['default'], allowedModels, body: body(), signal: new AbortController().signal })
+    await request.create()
+    expect(mocks.fetch).toHaveBeenCalledTimes(1)
+    mocks.groups.mockResolvedValue([])
+    await expect(prepareModelResponse({ profiles: ['restricted'], allowedModels, body: body(), signal: new AbortController().signal }))
+      .rejects.toMatchObject({ status: 404, param: 'model' })
+    expect(mocks.fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('lists configured provider models with qualified IDs, retaining nested model IDs and no credentials', async () => {
     mocks.groups.mockResolvedValue([
       { provider: 'glm', models: ['glm-5.3'] },

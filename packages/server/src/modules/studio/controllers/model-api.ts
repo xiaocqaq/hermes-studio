@@ -1,9 +1,12 @@
+import { claimCloudUsageReceipt } from '../services/model-api/cloud-usage'
+import { manageModelApiCloudLink } from '../services/model-api/cloud-link'
 import { Readable } from 'node:stream'
 import type { Context } from 'koa'
 import { listProfileNamesFromDisk } from '../public/profile-config'
 import { listApiModels, prepareModelResponse } from '../services/model-api/service'
 import { ModelApiError, modelApiErrorBody } from '../services/model-api/errors'
-import { createModelApiKey, listModelApiKeys, revokeModelApiKey } from '../services/model-api/keys'
+import { listModelApiKeys, revokeModelApiKey } from '../services/model-api/keys'
+import { createAccountModelApiKey, editAccountModelApiKey } from '../services/model-api/key-management'
 
 function profilesForRequest(ctx: Context): string[] {
   const user = ctx.state.user
@@ -17,7 +20,7 @@ function profilesForRequest(ctx: Context): string[] {
 
 export async function modelApiModels(ctx: Context) {
   ctx.set('Cache-Control', 'no-store')
-  try { ctx.body = await listApiModels(profilesForRequest(ctx)) }
+  try { ctx.body = await listApiModels(profilesForRequest(ctx), ctx.state.modelApiKey?.models) }
   catch (error) { const result = modelApiErrorBody(error); ctx.status = result.status; ctx.body = result.body }
 }
 
@@ -25,20 +28,21 @@ async function manageKeys(ctx: Context, operation: (userId: number) => unknown) 
   ctx.set('Cache-Control', 'no-store')
   try {
     if (!ctx.state.user) throw new ModelApiError('Studio login is required.', 401)
-    ctx.body = operation(ctx.state.user.id)
+    ctx.body = await operation(ctx.state.user.id)
   } catch (error) { const result = modelApiErrorBody(error); ctx.status = result.status; ctx.body = result.body }
 }
 export async function modelApiKeys(ctx: Context) {
   await manageKeys(ctx, userId => ({ keys: listModelApiKeys(userId) }))
 }
 export async function modelApiCreateKey(ctx: Context) {
-  await manageKeys(ctx, userId => {
-    const body = ctx.request.body as Record<string, unknown> | undefined
-    if (!body || Object.keys(body).some(key => key !== 'name')) throw new ModelApiError('Only a key name is accepted.', 400)
-    const result = createModelApiKey(userId, body.name)
+  await manageKeys(ctx, async userId => {
+    const result = await createAccountModelApiKey(userId, ctx.request.body, profilesForRequest(ctx))
     ctx.status = 201
     return result
   })
+}
+export async function modelApiEditKey(ctx: Context) {
+  await manageKeys(ctx, userId => editAccountModelApiKey(userId, ctx.params.id, ctx.request.body, profilesForRequest(ctx)))
 }
 export async function modelApiRevokeKey(ctx: Context) {
   await manageKeys(ctx, userId => {
@@ -54,7 +58,10 @@ export async function modelApiResponses(ctx: Context) {
   let streaming = false
   try {
     const request = await prepareModelResponse({
+      onUsage: claimCloudUsageReceipt(ctx.get('x-studio-cloud-usage'), ctx.state.user?.id, ctx.state.modelApiKey?.id),
       profiles: profilesForRequest(ctx), accountId: ctx.state.user ? String(ctx.state.user.id) : undefined,
+      allowedModels: ctx.state.modelApiKey?.models,
+      apiKeyId: ctx.state.modelApiKey?.id,
       body: ctx.request.body, signal: abort.signal,
     })
     ctx.set('x-request-id', request.id)
@@ -77,4 +84,9 @@ export async function modelApiResponses(ctx: Context) {
   } finally {
     if (!streaming) ctx.res.off('close', onClose)
   }
+}
+
+export async function modelApiCloudLink(ctx: Context) {
+  await manageKeys(ctx, userId => manageModelApiCloudLink(userId,
+    ctx.method === 'DELETE' ? 'revoke' : ctx.method === 'POST' ? ctx.request.body?.rotate === true ? 'rotate' : 'create' : 'get'))
 }

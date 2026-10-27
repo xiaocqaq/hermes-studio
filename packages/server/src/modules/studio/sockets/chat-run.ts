@@ -16,6 +16,7 @@ import { ClarificationRuns } from '../services/clarification-runs'
 import { TaskPlanRuns, taskPlanRunInstruction } from '../services/task-plan-runs'
 import { runMcpCredentials } from '../services/auth/run-mcp-credentials'
 import { saveTaskPlan } from '../repositories/task-plan-store'
+import { getSessionTasks, updateSessionTasks, SessionTasksError } from '../services/session-tasks'
 import { getSessionTaskPlans } from '../services/task-plans'
 import { bindLegacyAppEvents } from '../services/webhooks/legacy-app-events'
 import { bindAppEventSubscription } from '../services/webhooks/app-events'
@@ -492,6 +493,26 @@ export class ChatRunSocket {
     return this.taskPlanRuns.update(contextId, profile, input)
   }
 
+  private sessionTasksContext(contextId: string, profile: string) {
+    const sessionId = this.taskPlanRuns.sessionForContext(contextId, profile)
+    const session = getSession(sessionId)
+    const state = this.sessionMap.get(sessionId)
+    if (!session || (session.profile || 'default') !== profile
+      || ['group_chat', 'workflow', 'global_agent'].includes(session.source || '')
+      || ['group_chat', 'workflow', 'global_agent'].includes(state?.source || '')) {
+      throw new SessionTasksError('Session goals are unavailable in this context', 409)
+    }
+    return sessionId
+  }
+
+  listSessionTasks(contextId: string, profile: string) {
+    return getSessionTasks(this.sessionTasksContext(contextId, profile))
+  }
+
+  updateSessionTasks(contextId: string, profile: string, input: Record<string, unknown>) {
+    return updateSessionTasks(this.sessionTasksContext(contextId, profile), profile, input)
+  }
+
   requestClarification(contextId: string, profile: string, input: Record<string, unknown>, signal?: AbortSignal) {
     return this.clarificationRuns.request(contextId, profile, input, signal)
   }
@@ -502,11 +523,11 @@ export class ChatRunSocket {
     return { contextId, finish: (state: 'ended' | 'interrupted' | 'failed') => this.taskPlanRuns.finish(contextId, state) }
   }
 
-  private beginTaskPlanRun(sessionId: string | undefined, profile: string) {
+  private beginTaskPlanRun(sessionId: string | undefined, profile: string, sessionTasksEnabled = true) {
     if (!sessionId) return undefined
     runMcpCredentials.revoke(sessionId)
     this.clarificationRuns.finishSession(sessionId)
-    return this.taskPlanRuns.begin(sessionId, profile, () => this.sessionMap.get(sessionId))
+    return this.taskPlanRuns.begin(sessionId, profile, () => this.sessionMap.get(sessionId), undefined, sessionTasksEnabled)
   }
 
   private finishTaskPlanRun(sessionId: string, event: string, payload?: any, contextId?: string) {
@@ -865,11 +886,10 @@ export class ChatRunSocket {
       }
       return profile
     }
-    const requireSocketSessionAccess = (sessionId: string) => {
+    const requireSocketSessionAccess = (sessionId: string, authorizedProfile = currentProfile()) => {
       const session = getSession(sessionId)
       if (!session) throw new Error('Session not found')
       const sessionProfile = String(session.profile || 'default').trim() || 'default'
-      const authorizedProfile = currentProfile()
       if (sessionProfile !== authorizedProfile) {
         throw new Error(`Profile "${sessionProfile}" is not available on this connection`)
       }
@@ -885,7 +905,7 @@ export class ChatRunSocket {
     // user can access: the UI switches between profiles without always reconnecting (see
     // #1884), so pinning every read to the handshake profile made `resume` fail and left
     // the conversation permanently blank. Mutating operations keep the stricter
-    // connection-scoped check above (see the attachment provenance boundary in `run`).
+    // connection-scoped check above; attachment runs pass their separately authorized run profile.
     const requireSocketSessionReadAccess = (sessionId: string) => {
       const session = getSession(sessionId)
       if (!session) throw new Error('Session not found')
@@ -953,7 +973,7 @@ export class ChatRunSocket {
         normalizeEkkoRunData(data, data.session_id ? getSession(data.session_id) : undefined)
         if (!shared && data.session_id && Array.isArray(data.input)) {
           // New chats carry a client-generated id; the runtime persists them on the first run.
-          if (getSession(data.session_id)) requireSocketSessionAccess(data.session_id)
+          if (getSession(data.session_id)) requireSocketSessionAccess(data.session_id, runProfile)
           await recordSessionUploadAttachments(data.session_id, runProfile, data.input, { allowPendingSession: true })
         }
       } catch (err) {
@@ -1702,7 +1722,7 @@ export class ChatRunSocket {
         return
       }
 
-      const planContext = mcpCapabilities.interaction ? this.beginTaskPlanRun(data.session_id, profile) : undefined
+      const planContext = mcpCapabilities.interaction ? this.beginTaskPlanRun(data.session_id, profile, !data.background_delegation_id) : undefined
       if (planContext) data.instructions = [data.instructions, taskPlanRunInstruction()].filter(Boolean).join('\n\n')
       let fullInstructions = data.instructions
         ? `${getSystemPrompt(undefined, { source, mcpCapabilities })}\n${data.instructions}`

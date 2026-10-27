@@ -157,13 +157,18 @@ describe('usage cost accounting', () => {
   it('fills a cold-start record after download without duplicating tokens or repricing a replay', async () => {
     let finish!: (snapshot: unknown) => void
     catalogMock.refreshModelCatalog.mockReturnValue(new Promise(resolve => { finish = resolve }))
-    record('cold', { inputTokens: 1000, outputTokens: 200 })
+    const onRecorded = vi.fn()
+    record('cold', { inputTokens: 1000, outputTokens: 200 }, { onRecorded })
+    expect(onRecorded).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 1000, isEstimated: false }))
+    expect(onRecorded.mock.calls[0][0].costUsd).toBeUndefined()
     record('cold', { inputTokens: 1000, outputTokens: 200 })
     const before = db.prepare('SELECT * FROM session_usage').get() as any
     expect(before.cost_usd).toBeNull()
     expect(catalogMock.refreshModelCatalog).toHaveBeenCalledTimes(1)
     finish(catalogSnapshot)
     await vi.waitFor(() => expect(getLocalUsageStats('p', 1).cost).toBeCloseTo(0.0036))
+    expect(onRecorded).toHaveBeenCalledTimes(2)
+    expect(onRecorded.mock.calls[1][0]).toMatchObject({ inputTokens: 1000, outputTokens: 200, costUsd: 0.0036, costSource: 'estimated' })
     const after = db.prepare('SELECT * FROM session_usage').get() as any
     expect(after.created_at).toBe(before.created_at)
     expect(getLocalUsageStats('p', 1).input_tokens).toBe(1000)

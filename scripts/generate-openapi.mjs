@@ -43,6 +43,7 @@ const openapi = {
 
 // Tag mappings based on route directories
 const tagMappings = {
+  'modules/studio/routes/desktop-browser.ts': { name: 'Desktop Browser', description: 'Authenticated remote Desktop browser relay with explicit Desktop consent' },
   'modules/hermes/routes/profiles.ts': { name: 'Profiles', description: 'Hermes profile management' },
   'modules/hermes/routes/models.ts': { name: 'Models', description: 'Model configuration' },
   'modules/hermes/routes/providers.ts': { name: 'Providers', description: 'Model provider management' },
@@ -95,7 +96,6 @@ const tagMappings = {
   'modules/studio/routes/auth.ts': { name: 'Auth', description: 'Authentication management' },
   'modules/studio/routes/app-connections.ts': { name: 'App Connections', description: 'Mobile App authorization and connection management' },
   'modules/studio/routes/app-relay.ts': { name: 'App Relay', description: 'Mobile App cloud relay route and connection management' },
-  'modules/studio/routes/devices.ts': { name: 'Devices', description: 'Device pairing and LAN peer operations' },
   'modules/studio/routes/mcu-devices.ts': { name: 'MCU Devices', description: 'Microcontroller device management' },
   'modules/studio/routes/mcu-firmware.ts': { name: 'MCU Firmware', description: 'Microcontroller firmware distribution' },
   'modules/studio/routes/theme.ts': { name: 'Theme', description: 'Per-user appearance settings and background image' },
@@ -739,6 +739,13 @@ function schemaFromType(type) {
   if (/\bnull\b/.test(normalized)) schema.nullable = true
   if (/SessionProviderApiMode|CodingAgentApiMode/.test(normalized)) {
     return { ...schema, type: 'string', enum: ['chat_completions', 'codex_responses', 'anthropic_messages'] }
+  }
+  if (/\bProviderApiMode\b/.test(normalized)) {
+    return {
+      ...schema, type: 'string',
+      enum: ['chat_completions', 'codex_responses', 'anthropic_messages', 'bedrock_converse', 'codex_app_server', ...(schema.nullable ? [null] : [])],
+      ...(schema.nullable ? { description: 'Null clears the custom connection protocol override for automatic matching; no api_mode is written to configuration.' } : {}),
+    }
   }
   if (/string\[\]|Array<string>/.test(normalized)) {
     return { ...schema, type: 'array', items: { type: 'string' } }
@@ -1479,6 +1486,13 @@ for (const [path, methods] of Object.entries(openapi.paths)) {
 
 // JEV accepts named heterogeneous questions and never returns its stored API key.
 const jevSettingsProperties = {
+  ekkoComputerUseMatchEnabled: { type: 'boolean', default: false },
+  ekkoComputerUseMatchCandidateLimit: { type: 'integer', default: 20, minimum: 1, maximum: 50 },
+  ekkoComputerUseMatchMinConfidence: { type: 'number', default: 0.8, minimum: 0.5, maximum: 1 },
+  ekkoComputerUseMatchTimeoutMs: { type: 'integer', default: 3000, minimum: 100, maximum: 30000 },
+  ekkoComputerUseVerifyEnabled: { type: 'boolean', default: false },
+  ekkoComputerUseVerifyMinConfidence: { type: 'number', default: 0.8, minimum: 0.5, maximum: 1 },
+  ekkoComputerUseVerifyTimeoutMs: { type: 'integer', default: 3000, minimum: 100, maximum: 30000 },
   browserMatchEnabled: { type: 'boolean', default: false },
   browserVerifyEnabled: { type: 'boolean', default: false },
   browserMatchCandidateLimit: { type: 'integer', default: 20, minimum: 1, maximum: 50 },
@@ -1677,12 +1691,33 @@ const modelApiParameters = []
 const modelApiErrors = Object.fromEntries([
   ['400', 'Invalid input or unsupported Responses feature'], ['401', 'Missing, invalid or revoked Model API key, or expired Studio user JWT'],
   ['403', 'User or Profile access denied'], ['404', 'Profile or configured model not found'],
+  ['429', 'Model API key budget exhausted (insufficient_quota), or request costs are unknown (quota_cost_unknown)'],
   ['501', 'Provider requires an unsupported direct-request runtime'], ['502', 'Upstream model request failed'],
 ].map(([status, description]) => [status, { description }]))
+const keyBudgetSchema = { type: 'number', nullable: true, minimum: 0, maximum: 1000000, description: 'Lifetime USD budget. Null or omitted means unlimited; 0 blocks inference. Editing never resets spending.' }
 const keyMetadata = { type: 'object', properties: {
+  budgetUsd: keyBudgetSchema, spentUsd: { type: 'number', minimum: 0, description: 'Settled lifetime USD costs for this key' },
+  unpricedRequests: { type: 'integer', minimum: 0, description: 'Unpriced or pending requests. Limited keys pause when costs remain unresolved after completion or interruption; known in-flight calls can continue.' },
   id: { type: 'string' }, name: { type: 'string' }, preview: { type: 'string' },
+  models: { type: 'array', items: { type: 'string' }, description: 'Explicit provider-qualified model IDs allowed by this key' },
   createdAt: { type: 'integer', description: 'Unix milliseconds' }, lastUsedAt: { type: 'integer', nullable: true, description: 'Unix milliseconds' },
 } }
+const cloudLinkPath = openapi.paths['/api/studio/models/cloud-link']
+const cloudLinkSchema = { type: 'object', properties: {
+  available: { type: 'boolean' }, reason: { type: 'string' },
+  urls: { type: 'object', nullable: true, properties: { official: { type: 'string', format: 'uri' }, cloudflare: { type: 'string', format: 'uri' } } },
+  limits: { type: 'object', properties: Object.fromEntries(['uploadMaxMegabytes', 'downloadMaxMegabytes', 'uploadMegabytesPerSecond', 'downloadMegabytesPerSecond', 'requestsPerMinute'].map(key => [key, { type: 'integer', minimum: 1 }])) },
+} }
+for (const [method, suffix] of [['get', 'Get'], ['post', 'Create'], ['delete', 'Revoke']]) {
+  const operation = cloudLinkPath[method]
+  operation.operationId = `modelApiCloudLink${suffix}`
+  operation.summary = `${suffix} my dual-route cloud Model API link`
+  operation.parameters = modelApiParameters
+  operation.description = 'Requires Studio user authentication and a valid formal cloud connection for this machine/account. Independent of Profile. Returns available:false when cloud access, enabled server feature or relay v3 support is unavailable. The optional cloud feature is disabled by default; Agent run credentials cannot manage links. Addresses are routing IDs; model API keys are still required. Authorized cloud response calls record account/machine/model/token/USD metadata without request or response content. Reset/revoke invalidates both routes.'
+  operation.responses = { '200': { description: 'Cloud link status and independent limits', content: { 'application/json': { schema: cloudLinkSchema } } }, '401': { description: 'Studio login required' }, '503': { description: 'Cloud relay unavailable' } }
+}
+cloudLinkPath.post.requestBody = { required: false, content: { 'application/json': { schema: { type: 'object', properties: { rotate: { type: 'boolean', default: false, description: 'True replaces both URLs; otherwise creates a link if absent.' } } } } } }
+
 const keyManagementPath = openapi.paths['/api/studio/models/api-keys']
 keyManagementPath.get.summary = 'List my account-wide Model API keys'
 keyManagementPath.get.parameters = modelApiParameters
@@ -1690,18 +1725,28 @@ keyManagementPath.get.description = 'Requires Studio user authentication. Lists 
 keyManagementPath.get.responses = { '200': { description: 'Key metadata', content: { 'application/json': { schema: { type: 'object', properties: { keys: { type: 'array', items: keyMetadata } } } } } }, '401': { description: 'Studio login required' }, '403': { description: 'Profile access denied' } }
 keyManagementPath.post.summary = 'Create an account-wide Model API key'
 keyManagementPath.post.parameters = modelApiParameters
-keyManagementPath.post.description = 'Requires Studio user authentication. Key allows only model listing and Responses inference; valid until revoked. Only the hash is persisted. Limit: 50 keys per account. Cache-Control: no-store.'
-keyManagementPath.post.requestBody = { required: true, content: { 'application/json': { schema: { type: 'object', required: ['name'], additionalProperties: false, properties: { name: { type: 'string', minLength: 1, maxLength: 80 } } } } } }
+keyManagementPath.post.description = 'Requires Studio user authentication. Key allows model listing and Responses inference only for the explicitly selected models; valid until revoked. Only the hash is persisted. Limit: 50 keys per account. Cache-Control: no-store.'
+const modelApiKeySettings = { type: 'object', required: ['name', 'models'], additionalProperties: false, properties: {
+  budgetUsd: keyBudgetSchema,
+  name: { type: 'string', minLength: 1, maxLength: 80 }, models: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string' }, description: 'Currently accessible, callable provider-qualified model IDs. New models are not granted automatically.' },
+} }
+keyManagementPath.post.requestBody = { required: true, content: { 'application/json': { schema: modelApiKeySettings } } }
 keyManagementPath.post.responses = { '201': { description: 'Save the plaintext API key now; it is returned only once', content: { 'application/json': { schema: { type: 'object', properties: { key: keyMetadata, apiKey: { type: 'string' } } } } } }, '400': { description: 'Invalid key name or key limit reached' }, '401': { description: 'Studio login required' }, '403': { description: 'Profile access denied' } }
 const revokeKeyOperation = openapi.paths['/api/studio/models/api-keys/{id}'].delete
 revokeKeyOperation.summary = 'Revoke my Model API key'
 revokeKeyOperation.description = 'Requires Studio user authentication. Revokes only the caller’s key. Profile selection does not affect key ownership. New requests are rejected; already-running requests are not cancelled.'
 revokeKeyOperation.parameters = [...modelApiParameters, { name: 'id', in: 'path', required: true, schema: { type: 'string' } }]
 revokeKeyOperation.responses = { '200': { description: 'Key revoked' }, '401': { description: 'Studio login required' }, '403': { description: 'Profile access denied' }, '404': { description: 'No matching key owned by caller' } }
+const editKeyOperation = openapi.paths['/api/studio/models/api-keys/{id}'].patch
+editKeyOperation.summary = 'Edit my Model API key name, allowed models and USD budget'
+editKeyOperation.description = 'Requires Studio user authentication. Updates only the caller’s key. The secret, token hash and lifetime spending remain unchanged. budgetUsd sets a cumulative USD cap, null removes it and 0 pauses inference. Subsequent model listing and inference requests immediately use the saved model scope. Already-running requests are not cancelled.'
+editKeyOperation.parameters = revokeKeyOperation.parameters
+editKeyOperation.requestBody = { required: true, content: { 'application/json': { schema: modelApiKeySettings } } }
+editKeyOperation.responses = { '200': { description: 'Updated key metadata without plaintext or hash', content: { 'application/json': { schema: { type: 'object', properties: { key: keyMetadata } } } } }, '400': { description: 'Invalid name or model selection' }, '401': { description: 'Studio login required' }, '404': { description: 'No matching key owned by caller' } }
 const modelListOperation = openapi.paths['/api/ekko-studio/models/v1/models'].get
 modelListOperation.summary = 'List configured models with provider-qualified IDs'
 modelListOperation.parameters = modelApiParameters
-modelListOperation.description = 'Aggregates all accessible Profiles as provider/model and deduplicates IDs, preserving slashes inside native model IDs. Callable configurations win over disabled/unsupported duplicates, then default Profile, then Profile names in lexical order. Caller Profile selectors are ignored. Never returns credentials. MoA presets and self-referencing Model API providers using a locally issued Model API key are excluded from this catalog. responses_supported=false marks disabled models and providers requiring Bedrock or Codex app-server runtimes.'
+modelListOperation.description = 'Model API keys see only their explicitly allowed model IDs; Studio user JWTs see the full account catalog. Aggregates all accessible Profiles as provider/model and deduplicates IDs, preserving slashes inside native model IDs. Callable configurations win over disabled/unsupported duplicates, then default Profile, then Profile names in lexical order. Caller Profile selectors are ignored. Never returns credentials. MoA presets and self-referencing Model API providers using a locally issued Model API key are excluded from this catalog. responses_supported=false marks disabled models and providers requiring Bedrock or Codex app-server runtimes.'
 modelListOperation.responses = { ...modelApiErrors, '200': { description: 'OpenAI-compatible model list', content: { 'application/json': { schema: { type: 'object', properties: {
   object: { type: 'string', enum: ['list'] }, data: { type: 'array', items: { type: 'object', properties: {
     id: { type: 'string', example: 'glm/glm-5.3' }, object: { type: 'string', enum: ['model'] }, created: { type: 'integer' },
@@ -1711,7 +1756,7 @@ modelListOperation.responses = { ...modelApiErrors, '200': { description: 'OpenA
 const modelResponseOperation = openapi.paths['/api/ekko-studio/models/v1/responses'].post
 modelResponseOperation.summary = 'Request a configured model using OpenAI Responses format'
 modelResponseOperation.parameters = modelApiParameters
-modelResponseOperation.description = 'Stateless JSON or SSE inference through existing provider adapters. Supports text, base64 images on vision models, reasoning and function-tool continuations. Send full input history, including returned reasoning encrypted_content, unchanged. Protocol and credentials resolve server-side from the same unified catalog as GET /models. No Profile selector is required. Every attempted upstream request records external usage under the authenticated user. Does not execute tools or create chat sessions. See docs/model-api.md for supported features and limitations.'
+modelResponseOperation.description = 'Model API keys enforce their saved lifetime USD budget against settled request costs. Exhausted keys and limited keys with unpriced requests return 429 before inference; already-running calls can exceed the cap. Costs follow the usage ledger pricing rules. Studio user JWTs are outside key budgets. Model API key requests must name an allowed model; ungranted IDs return 404 before any provider request. Stateless JSON or SSE inference through existing provider adapters. Supports text, base64 images on vision models, reasoning and function-tool continuations. Send full input history, including returned reasoning encrypted_content, unchanged. Protocol and credentials resolve server-side from the same unified catalog as GET /models. No Profile selector is required. Every attempted upstream request records external usage under the authenticated user. Does not execute tools or create chat sessions. See docs/model-api.md for supported features and limitations.'
 modelResponseOperation.requestBody = { required: true, content: { 'application/json': { schema: {
   type: 'object', required: ['model', 'input'], properties: {
     model: { type: 'string', example: 'glm/glm-5.3' },
@@ -1781,6 +1826,118 @@ themeZipImport.responses = {
   '400': { description: 'Invalid or unsupported archive, manifest, settings or entries' },
   '401': { $ref: '#/components/responses/Unauthorized' },
   '413': { description: 'ZIP or background exceeds the allowed size' }, '415': { description: 'Expected ZIP bytes or a supported background image' },
+}
+
+const browserRelayOperation = openapi.paths['/api/studio/desktop-browser/request']?.post
+if (browserRelayOperation) {
+  browserRelayOperation.summary = 'Operate the explicitly authorized remote Desktop browser'
+  browserRelayOperation.description = 'Requires an identified Studio user and matching Profile with an explicitly authorized active Desktop. Ownership transfers only on real user input after 10 minutes of owner inactivity and no in-flight operation. No browser credentials or debug ports are exposed. Run bindings never silently switch desktops; disconnected or replaced targets fail closed.'
+  browserRelayOperation.requestBody = { required: true, content: { 'application/json': { schema: {
+    type: 'object', required: ['method', 'client_id'], additionalProperties: false,
+    properties: {
+      client_id: { type: 'string', minLength: 1, maxLength: 200, description: 'Stable browser MCP process identity bound with authenticated token/context to the original Desktop.' },
+      method: { type: 'string', enum: ['state', 'tabs.list', 'tabs.create', 'tabs.activate', 'tabs.close', 'lease.release', 'navigate', 'navigation.action', 'snapshot', 'text.read', 'interact', 'interact.batch', 'screenshot', 'console.read', 'console.clear'] },
+      params: { type: 'object', additionalProperties: true },
+    },
+  } } } }
+  browserRelayOperation.responses['403'] = { description: 'Identified Studio account required' }
+  browserRelayOperation.responses['409'] = { description: 'Unavailable, ambiguous, disconnected, revoked or invalid browser operation' }
+}
+
+// Durable session goals are maintained by the current conversation model, separate from run plans.
+openapi.components.schemas.SessionTask = {
+  type: 'object', required: ['id', 'title', 'summary', 'status', 'source_message_id', 'created_at', 'updated_at'],
+  properties: {
+    id: { type: 'string' }, title: { type: 'string', maxLength: 200 }, summary: { type: 'string', maxLength: 1000 },
+    status: { type: 'string', enum: ['open', 'completed'] },
+    source_message_id: { type: 'integer' }, evidence_message_id: { type: 'integer', nullable: true },
+    completion_evidence: { type: 'string', description: 'Concise evidence of verified delivery supplied by the conversation agent.' },
+    created_at: { type: 'integer', description: 'Unix time in milliseconds.' }, updated_at: { type: 'integer' },
+    completed_at: { type: 'integer', nullable: true },
+  },
+}
+const sessionTasksOperation = openapi.paths['/api/studio/sessions/{id}/tasks'].get
+sessionTasksOperation.operationId = 'getSessionTasks'
+sessionTasksOperation.summary = 'Read durable session goals'
+sessionTasksOperation.description = 'Returns persisted goals for an accessible Studio session. The current conversation agent reviews them at turn start and records only independent deliverables, ongoing follow-up or explicitly requested tracking. Simple questions, one-off lookups and trivial edits without lasting tracking value are skipped; refinements and corrections reuse the same goal. Eligible goals are created before execution; changed results are saved before the final response. Summaries contain one or two short sentences about results and remaining blockers. Goals span turns and are separate from run plans. Reading goals does not require a write or create a per-turn task-plan card.'
+sessionTasksOperation.parameters = [
+  { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+  { name: 'profile', in: 'query', required: false, schema: { type: 'string' }, description: 'Optional exact session profile filter.' },
+]
+sessionTasksOperation.responses = {
+  '200': { description: 'Current goal ledger; tasks is empty before the first goal is recorded.', content: { 'application/json': { schema: {
+    type: 'object', required: ['session_id', 'revision', 'updated_at', 'tasks'], properties: {
+      session_id: { type: 'string' }, revision: { type: 'integer', minimum: 0 }, updated_at: { type: 'integer' },
+      tasks: { type: 'array', items: { $ref: '#/components/schemas/SessionTask' } },
+    },
+  } } } },
+  '401': { $ref: '#/components/responses/Unauthorized' },
+  '403': { description: 'The authenticated user cannot access this session profile.' },
+  '404': { description: 'Session not found, or the explicit profile filter does not match.' },
+}
+
+
+openapi.components.schemas.SessionTaskListItem = {
+  allOf: [{ $ref: '#/components/schemas/SessionTask' }, {
+    type: 'object', required: ['session_id', 'session_title', 'profile', 'source', 'agent', 'message_id'], properties: {
+      session_id: { type: 'string' }, session_title: { type: 'string', nullable: true, description: 'Conversation display name, using the same first-user-message fallback as the session list when no title is set.' }, profile: { type: 'string' },
+      source: { type: 'string' }, agent: { type: 'string' }, message_id: { type: 'integer', nullable: true,
+        description: 'Visible user message beginning the request turn for open tasks or the completion turn for completed tasks. Use with the session/profile to navigate chat.' },
+    },
+  }],
+}
+const taskListOperation = openapi.paths['/api/studio/session-tasks'].get
+taskListOperation.operationId = 'listSessionTaskItems'
+taskListOperation.summary = 'List conversation tasks across accessible profiles'
+taskListOperation.description = 'Lists persisted single-chat tasks, including archived sessions, with stable pagination. Profile access and pending deletions are applied before counting. Group, workflow and global-agent tasks are excluded. Open tasks precede completed tasks; update time and id determine stable order within each status. Does not invoke a model or modify task status.'
+taskListOperation.parameters = [
+  { name: 'profile', in: 'query', schema: { type: 'string' }, description: 'Optional exact profile filter. Empty selects all accessible, existing profiles; run credentials remain bound to their profile.' },
+  { name: 'search', in: 'query', schema: { type: 'string', maxLength: 200 }, description: 'Literal substring in task title, summary or session name, including its first-message fallback.' },
+  { name: 'status', in: 'query', schema: { type: 'string', enum: ['open', 'completed'] } },
+  { name: 'order', in: 'query', schema: { type: 'string', enum: ['newest', 'oldest'], default: 'newest' } },
+  { name: 'offset', in: 'query', schema: { type: 'integer', minimum: 0, default: 0 } },
+  { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 } },
+]
+taskListOperation.responses = {
+  '200': { description: 'Authorized task page.', content: { 'application/json': { schema: {
+    type: 'object', required: ['tasks', 'total', 'has_more'], properties: {
+      tasks: { type: 'array', items: { $ref: '#/components/schemas/SessionTaskListItem' } },
+      total: { type: 'integer' }, has_more: { type: 'boolean' },
+    },
+  } } } },
+  '400': { description: 'Invalid filters or pagination.' },
+  '401': { $ref: '#/components/responses/Unauthorized' },
+  '403': { description: 'Profile access denied.' },
+}
+
+const sessionTaskChangeSchema = {
+  type: 'object', additionalProperties: false, required: ['title', 'summary', 'status'], properties: {
+    id: { type: 'string', minLength: 1, maxLength: 100 },
+    title: { type: 'string', minLength: 1, maxLength: 200, description: 'Concise user outcome; reuse the existing goal for refinements and corrections.' },
+    summary: { type: 'string', minLength: 1, maxLength: 1000, description: 'One or two short sentences about results and remaining blockers. Keep implementation and test logs in the conversation.' },
+    status: { type: 'string', enum: ['open', 'completed'] },
+    completion_evidence: { type: 'string', maxLength: 1000, description: 'Required for newly completed goals: evidence of verified delivery.' },
+  },
+}
+for (const action of ['list', 'update']) {
+  const operation = openapi.paths[`/api/studio/session-tasks/${action}`].post
+  operation.summary = `${action === 'list' ? 'Read' : 'Update'} the active turn session goals`
+  operation.description = 'The current turn context binds the session and profile. Expired contexts, other profiles, group chats, workflows and background/delegated runs are rejected. No per-turn task plan is created or modified. Writes upsert only changed/new goals and preserve omitted goals; revision conflicts require rereading. New completions require completion_evidence.'
+  operation.requestBody = { required: true, content: { 'application/json': { schema: {
+    type: 'object', additionalProperties: false,
+    required: action === 'list' ? ['context_id'] : ['context_id', 'revision', 'changes'],
+    properties: { context_id: { type: 'string', minLength: 1 }, ...(action === 'update' ? {
+      revision: { type: 'integer', minimum: 0 },
+      changes: { type: 'array', minItems: 1, maxItems: 30, items: sessionTaskChangeSchema },
+    } : {}) },
+  } } } }
+  operation.responses = {
+    ...sessionTasksOperation.responses,
+    '400': { description: 'Invalid input, foreign task id, duplicate goal or missing completion evidence.' },
+    '409': { description: 'Context expired, session scope unavailable, or revision changed; reread before retrying.' },
+    '503': { description: 'Chat run service unavailable.' },
+  }
+  delete operation.responses['404']
 }
 
 // Write output

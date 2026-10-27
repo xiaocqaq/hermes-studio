@@ -1126,9 +1126,6 @@
     "packages/client/src/views/hermes/ApiRelayView.vue": {
       "unowned-background | .api-relay-features span | background: $bg-secondary": 1
     },
-    "packages/client/src/views/hermes/DevicesView.vue": {
-      "literal-color | .pairing-code-dialog | box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24)": 1
-    },
     "packages/client/src/views/hermes/GroupChatLinkView.vue": {
       "literal-color | .link-card | box-shadow: 0 22px 70px rgba(0, 0, 0, 0.16)": 1,
       "unowned-background | .agent-config-form | background: $bg-primary": 1,

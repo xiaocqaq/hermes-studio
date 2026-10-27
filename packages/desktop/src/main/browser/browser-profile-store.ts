@@ -27,7 +27,7 @@ function safeName(input: string): string {
 }
 
 function safeProxyMode(input: unknown): BrowserProxyMode {
-  return input === 'system' || input === 'fixed_servers' ? input : 'direct'
+  return input === 'direct' || input === 'system' || input === 'fixed_servers' ? input : 'system'
 }
 
 function safeProxyRules(input: unknown, mode: BrowserProxyMode): string {
@@ -196,7 +196,7 @@ export class BrowserProfileStore {
         rootPath: join(this.root, 'profiles', id),
         sessionPath: join(this.root, 'profiles', id, 'data'),
         downloadPath: join(this.root, 'profiles', id, 'download'),
-        proxyMode: 'direct',
+        proxyMode: 'system',
         proxyRules: '',
         askBeforeDownload: true,
         downloadConflictPolicy: 'uniquify',

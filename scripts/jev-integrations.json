@@ -196,6 +196,41 @@
         "control": "NSwitch",
         "binding": "settings.groupLoopDetectionEnabled",
         "label": "jev.groupLoopDetectionEnabled"
+      },
+      "ekkoComputerUseMatchEnabled": {
+        "control": "NSwitch",
+        "binding": "settings.ekkoComputerUseMatchEnabled",
+        "label": "jev.computerUseMatchEnabled"
+      },
+      "ekkoComputerUseMatchCandidateLimit": {
+        "control": "NInputNumber",
+        "binding": "settings.ekkoComputerUseMatchCandidateLimit",
+        "label": "jev.computerUseMatchCandidateLimit"
+      },
+      "ekkoComputerUseMatchMinConfidence": {
+        "control": "NInputNumber",
+        "binding": "settings.ekkoComputerUseMatchMinConfidence",
+        "label": "jev.computerUseMatchMinConfidence"
+      },
+      "ekkoComputerUseMatchTimeoutMs": {
+        "control": "NInputNumber",
+        "binding": "settings.ekkoComputerUseMatchTimeoutMs",
+        "label": "jev.computerUseMatchTimeoutMs"
+      },
+      "ekkoComputerUseVerifyEnabled": {
+        "control": "NSwitch",
+        "binding": "settings.ekkoComputerUseVerifyEnabled",
+        "label": "jev.computerUseVerifyEnabled"
+      },
+      "ekkoComputerUseVerifyMinConfidence": {
+        "control": "NInputNumber",
+        "binding": "settings.ekkoComputerUseVerifyMinConfidence",
+        "label": "jev.computerUseVerifyMinConfidence"
+      },
+      "ekkoComputerUseVerifyTimeoutMs": {
+        "control": "NInputNumber",
+        "binding": "settings.ekkoComputerUseVerifyTimeoutMs",
+        "label": "jev.computerUseVerifyTimeoutMs"
       }
     }
   },
@@ -463,6 +498,63 @@
       "tests": [
         "tests/server/group-chat-message-routing.test.ts",
         "tests/server/jev.test.ts",
+        "tests/e2e/jev-settings.spec.ts"
+      ]
+    },
+    {
+      "id": "ekko-computer-use-match",
+      "purpose": "Suggest existing element tokens from a fresh native window observation.",
+      "status": "active",
+      "sources": [
+        "packages/ekko-agent/src/tools/computer-use/jev.ts",
+        "packages/ekko-agent/src/tools/computer-use/index.ts"
+      ],
+      "enabledKey": "ekkoComputerUseMatchEnabled",
+      "studioDefaultEnabled": false,
+      "options": [
+        "ekkoComputerUseMatchCandidateLimit",
+        "ekkoComputerUseMatchMinConfidence",
+        "ekkoComputerUseMatchTimeoutMs"
+      ],
+      "runtimeConfig": {
+        "file": "packages/ekko-agent/src/jev/config.ts",
+        "interface": "EkkoJevConfig",
+        "defaults": "DEFAULT_EKKO_JEV_CONFIG",
+        "enabledKey": "computerUseMatchEnabled",
+        "mappingFunction": "getJevRuntimeConfig"
+      },
+      "tests": [
+        "tests/ekko-agent/computer-use-jev.test.ts",
+        "tests/server/jev.test.ts",
+        "tests/ekko-agent/jev.test.ts",
+        "tests/e2e/jev-settings.spec.ts"
+      ]
+    },
+    {
+      "id": "ekko-computer-use-verify",
+      "purpose": "Assess expected outcomes using bounded native window labels and control states.",
+      "status": "active",
+      "sources": [
+        "packages/ekko-agent/src/tools/computer-use/jev.ts",
+        "packages/ekko-agent/src/tools/computer-use/index.ts"
+      ],
+      "enabledKey": "ekkoComputerUseVerifyEnabled",
+      "studioDefaultEnabled": false,
+      "options": [
+        "ekkoComputerUseVerifyMinConfidence",
+        "ekkoComputerUseVerifyTimeoutMs"
+      ],
+      "runtimeConfig": {
+        "file": "packages/ekko-agent/src/jev/config.ts",
+        "interface": "EkkoJevConfig",
+        "defaults": "DEFAULT_EKKO_JEV_CONFIG",
+        "enabledKey": "computerUseVerifyEnabled",
+        "mappingFunction": "getJevRuntimeConfig"
+      },
+      "tests": [
+        "tests/ekko-agent/computer-use-jev.test.ts",
+        "tests/server/jev.test.ts",
+        "tests/ekko-agent/jev.test.ts",
         "tests/e2e/jev-settings.spec.ts"
       ]
     }

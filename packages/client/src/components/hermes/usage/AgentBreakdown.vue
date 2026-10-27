@@ -2,33 +2,19 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useUsageStore } from '@/stores/hermes/usage'
+import { agentMetadata } from '@/utils/agent-catalog'
+import { formatUsageTokens } from '@/utils/usage-display'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const usageStore = useUsageStore()
 const maxAgentTokens = computed(() => Math.max(...usageStore.agentUsage.map(agent => agent.visualTokens), 1))
 
-const agentLabels: Record<string, string> = {
-  hermes: 'hermes',
-  claude_code: 'claudeCode',
-  codex: 'codex',
-  pi: 'pi',
-  grok: 'grok',
-  opencode: 'opencode',
-  dsh: 'dsh',
-  cursor: 'cursor',
-  antigravity: 'antigravity',
-  ekko_agent: 'ekkoAgent',
-}
-
 function agentName(agent: string): string {
-  return t(`usage.agents.${agentLabels[agent] || 'unknown'}`)
+  if (agent === 'unknown') return t('usage.agents.unknown')
+  const id = agent === 'claude_code' ? 'claude-code' : agent === 'ekko_agent' ? 'ekko-agent' : agent
+  return agentMetadata(id)?.name || agent
 }
-
-function formatTokens(n: number): string {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M'
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K'
-  return String(n)
-}
+function formatTokens(n: number): string { return formatUsageTokens(n, locale?.value) }
 
 function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): string {
   const total = agent.inputTokens + agent.cacheTokens
@@ -38,17 +24,18 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
 </script>
 
 <template>
-  <div class="agent-breakdown">
+  <section class="agent-breakdown" data-theme-surface="card" data-testid="agent-usage">
     <h3 class="section-title">{{ t('usage.agentBreakdown') }}</h3>
+    <p class="agent-note">{{ t('usage.dashboard.tokenDefinition') }}</p>
 
-    <div class="agent-legend" aria-label="Token type legend">
+    <div class="agent-legend" :aria-label="t('usage.agentBreakdown')">
       <div class="legend-item"><span class="legend-swatch input" />{{ t('usage.inputTokens') }}</div>
       <div class="legend-item"><span class="legend-swatch output" />{{ t('usage.outputTokens') }}</div>
       <div class="legend-item"><span class="legend-swatch cache" />{{ t('usage.cacheRead') }}</div>
     </div>
 
     <div class="agent-list">
-      <div v-for="agent in usageStore.agentUsage" :key="agent.agent" class="agent-row">
+      <div v-for="agent in usageStore.agentUsage" :key="agent.agent" class="agent-row" :data-agent="agent.agent">
         <span class="agent-swatch" :style="{ background: agent.color }" />
         <span class="agent-name" :title="agentName(agent.agent)">{{ agentName(agent.agent) }}</span>
         <div class="agent-bar-wrap">
@@ -65,9 +52,17 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
           {{ formatTokens(agent.totalTokens) }}
           <small v-if="agent.cacheTokens > 0">+{{ formatTokens(agent.cacheTokens) }}</small>
         </span>
+        <div class="agent-details">
+          <span>{{ t('usage.inputTokens') }} {{ formatTokens(agent.inputTokens) }}</span>
+          <span>{{ t('usage.outputTokens') }} {{ formatTokens(agent.outputTokens) }}</span>
+          <span>{{ t('usage.cacheRead') }} {{ formatTokens(agent.cacheTokens) }}</span>
+          <span>{{ t('usage.cacheWrite') }} {{ formatTokens(agent.cacheWriteTokens) }}</span>
+          <span>{{ t('usage.sessions') }} {{ agent.sessions }}</span>
+        </div>
       </div>
+      <p v-if="!usageStore.agentUsage.length" class="agent-note">{{ t('usage.noData') }}</p>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped lang="scss">
@@ -125,7 +120,8 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
 }
 
 .agent-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 8px minmax(90px, 140px) minmax(0, 1fr) auto;
   align-items: center;
   gap: calc(10px * var(--spacing-scale, 1));
 }
@@ -133,7 +129,7 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
 .agent-name {
   font-size: calc(var(--font-size-base, 14px) * 12 / 14);
   color: $text-secondary;
-  width: 140px;
+  min-width: 0;
   flex-shrink: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -165,7 +161,7 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
 .agent-tokens {
   font-size: calc(var(--font-size-base, 14px) * 12 / 14);
   color: $text-muted;
-  width: 86px;
+  white-space: nowrap;
   text-align: end;
   flex-shrink: 0;
 
@@ -174,5 +170,13 @@ function cacheHitRate(agent: { inputTokens: number; cacheTokens: number }): stri
     margin-inline-start: 4px;
     font-size: calc(var(--font-size-base, 14px) * 10 / 14);
   }
+}
+.agent-note, .agent-details { color: $text-secondary; font-size: calc(var(--font-size-base, 14px) * 11 / 14); line-height: var(--line-height, 1.6); }
+.agent-note { margin: 0 0 12px; }
+.agent-details { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: calc(4px * var(--spacing-scale, 1)) calc(14px * var(--spacing-scale, 1)); padding-bottom: 8px; }
+@media (max-width: 600px) {
+  .agent-row { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .agent-bar-wrap { grid-column: 2 / -1; grid-row: 2; }
+  .agent-tokens { grid-column: 3; grid-row: 1; }
 }
 </style>

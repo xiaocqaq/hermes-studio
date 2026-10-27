@@ -46,6 +46,32 @@ describe('providers controller create', () => {
     hermesHome = ''
   })
 
+  it.each(['legacy', 'dict'])('refuses to overwrite a %s provider when create_only is requested', async schema => {
+    const entry = { name: 'example-relay', base_url: 'https://keep.example/v1', api_key: 'keep-key', model: 'keep-model' }
+    writeFileSync(join(hermesHome, 'config.yaml'), YAML.dump({
+      model: { default: 'keep-model', provider: 'custom:example-relay' },
+      ...(schema === 'legacy' ? { custom_providers: [entry] } : { providers: { 'example-relay': entry } }),
+    }))
+    const before = readFileSync(join(hermesHome, 'config.yaml'), 'utf8')
+    const { create } = await loadProvidersController()
+    const ctx = makeCtx({ name: 'Example Relay', base_url: 'https://new.example/v1', api_key: 'new-key', model: 'new-model', create_only: true })
+    await create(ctx)
+    expect(ctx.status).toBe(409)
+    expect(readFileSync(join(hermesHome, 'config.yaml'), 'utf8')).toBe(before)
+    expect(readFileSync(join(hermesHome, '.env'), 'utf8')).toBe('')
+  })
+
+  it('allows a fresh create-only import scoped to a named profile', async () => {
+    mkdirSync(join(hermesHome, 'profiles', 'research'), { recursive: true })
+    writeFileSync(join(hermesHome, 'profiles', 'research', 'config.yaml'), 'model: {}\n')
+    const before = readFileSync(join(hermesHome, 'config.yaml'), 'utf8')
+    const { create } = await loadProvidersController()
+    const ctx = makeCtx({ name: 'Example Relay', base_url: 'https://relay.example/v1', api_key: 'fixture-key', model: 'example-model', create_only: true }, 'research')
+    await create(ctx)
+    expect(ctx.status).toBe(200)
+    expect(readYaml(join(hermesHome, 'profiles', 'research', 'config.yaml')).custom_providers[0].name).toBe('example-relay')
+    expect(readFileSync(join(hermesHome, 'config.yaml'), 'utf8')).toBe(before)
+  })
   it('does not persist a built-in provider base URL when it matches the preset default', async () => {
     const { create } = await loadProvidersController()
     const ctx = makeCtx({
@@ -62,6 +88,16 @@ describe('providers controller create', () => {
     const envAfter = readFileSync(join(hermesHome, '.env'), 'utf-8')
     expect(envAfter).toContain('DEEPSEEK_API_KEY=deepseek-key')
     expect(envAfter).not.toContain('DEEPSEEK_BASE_URL')
+  })
+
+  it('omits the protocol for automatic custom connections even when their name matches a preset', async () => {
+    const { create } = await loadProvidersController()
+    const ctx = makeCtx({ name: 'anthropic', base_url: 'https://relay.example/v1', api_key: 'fixture-key', model: 'model-a', api_mode: null, create_only: true })
+    await create(ctx)
+    expect(ctx.status).toBe(200)
+    const entry = readYaml(join(hermesHome, 'config.yaml')).custom_providers[0]
+    expect(entry).toMatchObject({ name: 'anthropic', base_url: 'https://relay.example/v1' })
+    expect(entry).not.toHaveProperty('api_mode')
   })
 
   it.each(['deepseek', 'opencode-zen', 'opencode-go'])('does not persist catalog protocol metadata when adding %s', async provider => {

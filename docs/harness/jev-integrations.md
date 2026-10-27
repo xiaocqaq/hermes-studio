@@ -47,6 +47,15 @@ must still be enabled before its configured child features can use JEV.
 | `ekko-memory-write-review` | Active: `memory/jev-write-review.ts` | `ekkoMemoryWriteReviewEnabled` | `jev.memoryWriteReviewEnabled` | Memory options → Review memory writes |
 | `ekko-skills` | Active: `skills/jev.ts`, routing and learning preflight | `ekkoSkillsEnabled` | `jev.skillsEnabled` | Models → JEV → Use JEV for Ekko skills |
 
+Computer Use integrations `ekko-computer-use-match` and `ekko-computer-use-verify`
+are independently default-off at Models → JEV → Ekko Computer Use.
+Studio `ekkoComputerUseMatch*` / `ekkoComputerUseVerify*` map to standalone
+`jev.computerUseMatch*` / `jev.computerUseVerify*` at each normal/isolated run.
+The agent-owned evaluator assesses only fresh native window labels and control
+states. It returns advisory token suggestions or outcome judgments and never
+dispatches input. See [Computer Use JEV](../../packages/ekko-agent/docs/computer-use.md#optional-jev-assessments)
+for fields, limits, cancellation and fallback behavior.
+
 Browser integrations `browser-match` and `browser-verify` are registered independently
 with default-off switches `browserMatchEnabled` and `browserVerifyEnabled` at
 Models → JEV → Built-in browser automation. They share the provider connection,

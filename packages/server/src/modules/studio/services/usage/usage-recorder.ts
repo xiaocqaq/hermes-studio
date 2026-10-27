@@ -14,10 +14,18 @@ export interface NormalizedTokenUsage {
   reasoningTokens: number
 }
 
+export interface RecordedUsage extends NormalizedTokenUsage {
+  isEstimated: boolean
+  costUsd?: number
+  costSource?: 'reported' | 'estimated'
+}
+
 export interface RecordSessionUsageInput {
+  onRecorded?: (usage: RecordedUsage) => void
   sessionId: string
   origin?: 'internal' | 'external'
   accountId?: string
+  modelApiKeyId?: string
   runId?: string | null
   /** The foreground run, separate from the deduplication key for each API call. */
   parentRunId?: string
@@ -123,6 +131,10 @@ export function normalizeTokenUsage(
 
 export function recordSessionUsage(input: RecordSessionUsageInput): NormalizedTokenUsage {
   const usage = normalizeTokenUsage(input.usage, input.fallbackUsage)
+  const notify = (cost?: UsageCost) => {
+    try { input.onRecorded?.({ ...usage, ...(cost ? { costUsd: cost.costUsd, costSource: cost.costSource } : {}) }) }
+    catch { logger.warn('[usage-recorder] usage notification failed') }
+  }
   const canPrice = input.origin !== 'external' || !usage.isEstimated
   try {
     let cost: UsageCost | undefined
@@ -150,6 +162,7 @@ export function recordSessionUsage(input: RecordSessionUsageInput): NormalizedTo
     const row = updateUsage(input.sessionId, {
       ...(input.origin ? { origin: input.origin } : {}),
       ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(input.modelApiKeyId ? { modelApiKeyId: input.modelApiKeyId } : {}),
       runId: input.runId || '',
       ...(input.createdAt != null ? { createdAt: input.createdAt } : {}),
       ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
@@ -170,6 +183,7 @@ export function recordSessionUsage(input: RecordSessionUsageInput): NormalizedTo
       isEstimated: input.isEstimated ?? usage.isEstimated,
       ...(cost || {}),
     })
+    notify(cost)
     // Cold start: persist tokens immediately, then fill this new row after the shared download.
     // Replays return no inserted row, so a later catalog never reprices historical usage.
     if (canPrice && row && !cost && !hasManualPricing && !catalog && input.model) {
@@ -177,7 +191,7 @@ export function recordSessionUsage(input: RecordSessionUsageInput): NormalizedTo
       const model = input.model
       void refreshModelCatalog().then(snapshot => {
         const estimate = estimateCatalogUsageCost(snapshot, provider, model, usage, input.usageScope, input.apiCalls, baseUrl)
-        if (estimate) fillMissingUsageCost(row, estimate)
+        if (estimate) { fillMissingUsageCost(row, estimate); notify(estimate) }
       }).catch(err => logger.warn({ err }, '[usage-recorder] failed to fill catalog cost'))
     }
   } catch (err) {
@@ -187,6 +201,8 @@ export function recordSessionUsage(input: RecordSessionUsageInput): NormalizedTo
       runId: input.runId,
       source: input.source,
     }, '[usage-recorder] failed to persist session usage')
+    notify()
+    if (input.modelApiKeyId) throw err
   }
   return usage
 }

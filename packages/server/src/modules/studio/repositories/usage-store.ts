@@ -48,6 +48,7 @@ export function updateUsage(
   data: {
     origin?: 'internal' | 'external'
     accountId?: string
+    modelApiKeyId?: string
     runId?: string
     parentRunId?: string
     createdAt?: number
@@ -138,6 +139,17 @@ export function updateUsage(
       costSource,
       costPricing,
     ]
+    if (data.modelApiKeyId) {
+      columns.push('model_api_key_id')
+      values.push('?')
+      params.push(data.modelApiKeyId)
+      // Replace only our provisional request, once. Ordinary usage records
+      // remain immutable and continue to use the existing deduplication index.
+      const settled = db.prepare(`UPDATE ${TABLE} SET ${columns.map(column => `${column} = ?`).join(', ')}, model_api_pending = 0
+        WHERE model_api_key_id = ? AND account_id = ? AND run_id = ? AND source = 'model_api' AND model_api_pending = 1 RETURNING id`)
+        .get(...params, data.modelApiKeyId, account, data.runId || '') as { id: number } | undefined
+      if (settled) return { id: Number(settled.id) }
+    }
     if (hasUpdatedAtColumn()) {
       columns.push('updated_at')
       values.push('?')
@@ -154,6 +166,7 @@ export function updateUsage(
       id,
       origin: data.origin || 'internal',
       account_id: account,
+      ...(data.modelApiKeyId ? { model_api_key_id: data.modelApiKeyId } : {}),
       run_id: data.runId || '',
       parent_run_id: data.parentRunId || '',
       api_duration: data.apiDuration ?? null,

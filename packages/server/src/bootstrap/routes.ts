@@ -1,3 +1,4 @@
+import { desktopBrowserRoutes } from '../modules/studio/routes/desktop-browser'
 import type { Context, Next } from 'koa'
 import './hermes-ops-adapter'
 import './agent-log-adapter'
@@ -12,7 +13,6 @@ import { updateRoutes } from './update'
 import { themeRoutes } from '../modules/studio/routes/theme'
 import { announcementRoutes } from '../modules/studio/routes/announcements'
 import { appConnectionRoutes, appRelayRoutes } from './app-relay'
-import { devicePublicRoutes, deviceRoutes } from './devices'
 import { socialMessageRoutes } from '../modules/studio/routes/social-messages'
 import {
   claudeCodeProxyRoutes,
@@ -24,7 +24,7 @@ import {
 import { uploadRoutes } from '../modules/studio/routes/upload'
 import { appUploadRoutes } from '../modules/studio/routes/app-upload'
 import { authPublicRoutes, authProtectedRoutes } from '../modules/studio/routes/auth'
-import { mcuDeviceRoutes } from '../modules/studio/routes/mcu-devices'
+import { mcuDevicePublicRoutes, mcuDeviceRoutes } from '../modules/studio/routes/mcu-devices'
 
 import { sessionRoutes } from '../modules/studio/routes/sessions'
 import { modelApiRoutes } from '../modules/studio/routes/model-api'
@@ -85,7 +85,7 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
   // --- Public routes (no auth required) ---
   app.use(healthRoutes.routes())
   app.use(authPublicRoutes.routes())
-  app.use(devicePublicRoutes.routes())
+  app.use(mcuDevicePublicRoutes.routes())
   app.use(claudeCodeProxyRoutes.routes())
   app.use(codexProxyRoutes.routes())
   app.use(ttsRoutes.routes())
@@ -100,7 +100,7 @@ export function registerRoutes(app: any, authMiddleware: Array<(ctx: Context, ne
 
   // --- Protected routes (auth required) ---
   app.use(authProtectedRoutes.routes())
-  app.use(deviceRoutes.routes())
+  app.use(desktopBrowserRoutes.routes())
   app.use(mcuDeviceRoutes.routes())
   app.use(appConnectionRoutes.routes())
   app.use(uploadRoutes.routes())

@@ -103,17 +103,17 @@ describe('remote server URL sources', () => {
 })
 
 describe('remote readiness timeout', () => {
-  it('defaults to 30 seconds and accepts positive overrides', () => {
-    expect(remoteReadyTimeoutMs({})).toBe(30_000)
+  it('defaults to 300 seconds and accepts positive overrides', () => {
+    expect(remoteReadyTimeoutMs({})).toBe(300_000)
     expect(remoteReadyTimeoutMs({ EKKO_STUDIO_DESKTOP_REMOTE_READY_TIMEOUT_MS: '5000' })).toBe(5000)
-    expect(remoteReadyTimeoutMs({ EKKO_STUDIO_DESKTOP_REMOTE_READY_TIMEOUT_MS: '-1' })).toBe(30_000)
-    expect(remoteReadyTimeoutMs({ EKKO_STUDIO_DESKTOP_REMOTE_READY_TIMEOUT_MS: 'abc' })).toBe(30_000)
+    expect(remoteReadyTimeoutMs({ EKKO_STUDIO_DESKTOP_REMOTE_READY_TIMEOUT_MS: '-1' })).toBe(300_000)
+    expect(remoteReadyTimeoutMs({ EKKO_STUDIO_DESKTOP_REMOTE_READY_TIMEOUT_MS: 'abc' })).toBe(300_000)
   })
 })
 
 describe('remote server readiness probe', () => {
   it('resolves once /health/ready responds ok', async () => {
-    const fetchMock = vi.fn(async () => ({ ok: true } as Response))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ status: 'ready' })))
     vi.stubGlobal('fetch', fetchMock)
 
     await waitForRemoteServerReady('http://remote.example:6060', 5_000)
@@ -121,10 +121,39 @@ describe('remote server readiness probe', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://remote.example:6060/health/ready', expect.anything())
   })
 
+  it('accepts a ready server whose response takes longer than two seconds', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url, options) => new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(new Response(JSON.stringify({ status: 'ready' }))), 2_200)
+      options.signal.addEventListener('abort', () => {
+        clearTimeout(timer)
+        reject(options.signal.reason)
+      }, { once: true })
+    })))
+    await expect(waitForRemoteServerReady('https://remote.example', 5_000)).resolves.toBeUndefined()
+  })
+
+  it('limits a stalled request to the remaining overall timeout', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn((_url, options) => new Promise<Response>((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+    })))
+    await expect(waitForRemoteServerReady('https://remote.example', 100)).rejects.toThrow('did not become ready')
+    expect(timeout).toHaveBeenCalledOnce()
+    expect(timeout.mock.calls[0][0]).toBeLessThanOrEqual(100)
+  })
+
+  it('gives a readiness response the configured 300-second budget', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ status: 'ready' }))))
+    await waitForRemoteServerReady('https://remote.example', remoteReadyTimeoutMs({}))
+    expect(timeout.mock.calls[0][0]).toBeGreaterThan(299_000)
+    expect(timeout.mock.calls[0][0]).toBeLessThanOrEqual(300_000)
+  })
+
   it('retries while the server answers non-2xx', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: false, status: 503 } as Response)
-      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ready' })))
     vi.stubGlobal('fetch', fetchMock)
 
     await waitForRemoteServerReady('http://remote.example:6060', 10_000)
@@ -146,6 +175,20 @@ describe('remote server readiness probe', () => {
     const throwingFetch = vi.fn(async () => { throw new Error('ECONNREFUSED') })
     vi.stubGlobal('fetch', throwingFetch)
     await expect(waitForRemoteServerReady('http://remote.example:6060', 600)).rejects.toThrow('ECONNREFUSED')
+  })
+
+  it.each(['<html>Login page</html>', '{"status":"starting"}', '{"service":"something else"}'])('rejects an HTTP 200 that is not a ready Studio server: %s', async body => {
+    const fetchMock = vi.fn(async () => new Response(body))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(waitForRemoteServerReady('http://remote.example:6060', 50)).rejects.toThrow('Expected a ready Studio server')
+    expect(fetchMock).toHaveBeenCalledWith('http://remote.example:6060/health/ready', expect.objectContaining({ redirect: 'error', cache: 'no-store' }))
+  })
+
+  it('rejects subpath deployments before making a request', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(waitForRemoteServerReady('https://remote.example/studio', 5000)).rejects.toThrow('UNSUPPORTED_PATH')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 

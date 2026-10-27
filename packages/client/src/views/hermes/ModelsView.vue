@@ -11,6 +11,8 @@ import JevSettingsPanel from '@/components/hermes/models/JevSettingsPanel.vue'
 import ModelApiPanel from '@/components/hermes/models/ModelApiPanel.vue'
 import ProvidersPanel from '@/components/hermes/models/ProvidersPanel.vue'
 import ProviderFormModal from '@/components/hermes/models/ProviderFormModal.vue'
+import ProviderImportModal from '@/components/hermes/models/ProviderImportModal.vue'
+import { pendingProviderImport, type ProviderImport } from '@/utils/provider-import'
 import ProviderVisibilityModal from '@/components/hermes/models/ProviderVisibilityModal.vue'
 import ModelCatalogNotice from '@/components/hermes/models/ModelCatalogNotice.vue'
 import VoiceSettings from '@/components/hermes/settings/VoiceSettings.vue'
@@ -29,6 +31,24 @@ const message = useMessage()
 const route = useRoute()
 const router = useRouter()
 const showModal = ref(false)
+const importDraft = ref<ProviderImport | null>(null)
+const importRevision = ref(0)
+watch(pendingProviderImport, pending => {
+  if (!pending) return
+  pendingProviderImport.value = null
+  if (pending.invalid) message.error(t('models.importInvalid'))
+  else if (pending.draft) {
+    importRevision.value++
+    importDraft.value = pending.draft
+  }
+}, { immediate: true })
+
+async function handleImportSaved(profile: string) {
+  importDraft.value = null
+  await router.replace({ query: { ...route.query, modelProfile: profile } })
+  await modelsStore.fetchProviders()
+  await appStore.reloadModels({ preserveSelection: true })
+}
 const showLargeCatalogNotice = ref(false)
 const visibilityProviderId = ref('')
 const largeCatalogProviders = computed(() => modelsStore.providers.filter(provider => provider.models.length > 100))
@@ -270,6 +290,10 @@ async function handleRefreshModelCache() {
       @close="handleModalClose"
       @saved="handleSaved"
     />
+    <ProviderImportModal v-if="importDraft && !profileLoading && selectedProfile"
+      :key="importRevision"
+      :draft="importDraft" :profile="selectedProfile" :profiles="profiles"
+      @close="importDraft = null" @saved="handleImportSaved" />
     <ModelCatalogNotice
       v-if="activeTab !== 'api' && largeCatalogProviders.length > 0 && !profileLoading && !modelsStore.loading && !modelsStore.refreshingModelCache && !showModal && !visibilityProvider && !catalogBusy"
       v-model:show="showLargeCatalogNotice"

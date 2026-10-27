@@ -10,11 +10,14 @@ const collaborationDefaults = {
   groupMessageRoutingMinConfidence: .9, groupMessageRoutingMode: 'suggest', groupMessageRoutingTimeoutMs: 1500,
 }
 
+const computerDefaults = { ekkoComputerUseMatchEnabled: false, ekkoComputerUseMatchCandidateLimit: 20, ekkoComputerUseMatchMinConfidence: 0.8, ekkoComputerUseMatchTimeoutMs: 3000, ekkoComputerUseVerifyEnabled: false, ekkoComputerUseVerifyMinConfidence: 0.8, ekkoComputerUseVerifyTimeoutMs: 3000 }
+const computerOptions = { ekkoComputerUseMatchEnabled: true, ekkoComputerUseMatchCandidateLimit: 9, ekkoComputerUseMatchMinConfidence: .85, ekkoComputerUseMatchTimeoutMs: 1300, ekkoComputerUseVerifyEnabled: true, ekkoComputerUseVerifyMinConfidence: .9, ekkoComputerUseVerifyTimeoutMs: 1700 }
+const computerFields = ['computerUseMatchEnabled', 'computerUseMatchCandidateLimit', 'computerUseMatchMinConfidence', 'computerUseMatchTimeoutMs', 'computerUseVerifyEnabled', 'computerUseVerifyMinConfidence', 'computerUseVerifyTimeoutMs'] as const
 const browserDefaults = { browserMatchEnabled: false, browserMatchCandidateLimit: 20, browserMatchMinConfidence: 0.8,
   browserMatchTimeoutMs: 3000, browserVerifyEnabled: false, browserVerifyMinConfidence: 0.8, browserVerifyTimeoutMs: 3000 }
 const browserOptions = { browserMatchEnabled: true, browserMatchCandidateLimit: 12, browserMatchMinConfidence: 0.9,
   browserMatchTimeoutMs: 1100, browserVerifyEnabled: true, browserVerifyMinConfidence: 0.95, browserVerifyTimeoutMs: 1400 }
-const memoryDefaults = { ...collaborationDefaults, ...browserDefaults, ekkoSkillsEnabled: false, ekkoSkillsCandidateLimit: 20, ekkoSkillsMinConfidence: 0.8, ekkoSkillsTimeoutMs: 3000, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true,
+const memoryDefaults = { ...computerDefaults, ...collaborationDefaults, ...browserDefaults, ekkoSkillsEnabled: false, ekkoSkillsCandidateLimit: 20, ekkoSkillsMinConfidence: 0.8, ekkoSkillsTimeoutMs: 3000, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true,
   ekkoMemoryCandidateLimit: 20, ekkoMemoryRecallMinConfidence: 0.5, ekkoMemoryFilterMinConfidence: 0.8, ekkoMemoryMinConfidence: 0.8, ekkoMemoryTimeoutMs: 3000 }
 
 for (const [locale, messages] of [['en', en], ['zh', zh]] as const) {
@@ -23,7 +26,7 @@ for (const [locale, messages] of [['en', en], ['zh', zh]] as const) {
     await page.addInitScript(value => localStorage.setItem('hermes_locale', value), locale)
     await mockHermesApi(page, { initialProfileName: 'default' })
     let loadFailed = true
-    let testFailure: 'auth_failed' | 'timeout' | 'network' | null = 'auth_failed'
+    let testFailure: 'auth_failed' | 'endpoint_not_found' | 'timeout' | 'network' | null = 'auth_failed'
     await page.route('**/api/studio/jev/settings', async route => {
       if (loadFailed) {
         await route.fulfill({ status: 500, json: { error: 'Internal storage failure', code: 'jev_settings_failed' } })
@@ -57,6 +60,10 @@ for (const [locale, messages] of [['en', en], ['zh', zh]] as const) {
     await testButton.click()
     await expect(panel).toContainText(messages.jev.errors.auth_failed)
     await expect(panel).not.toContainText('Upstream English diagnostic')
+    testFailure = 'endpoint_not_found'
+    await testButton.click()
+    await expect(panel).toContainText(messages.jev.errors.endpoint_not_found)
+    await expect(panel).not.toContainText(messages.jev.errors.provider_error)
     testFailure = 'timeout'
     await testButton.click()
     await expect(panel).toContainText(messages.jev.errors.timeout)
@@ -133,17 +140,26 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   for (const key of ['browserMatchCandidateLimit', 'browserMatchMinConfidence', 'browserMatchTimeoutMs', 'browserVerifyMinConfidence', 'browserVerifyTimeoutMs'] as const) {
     await page.getByLabel(en.jev[key], { exact: true }).fill(String(browserOptions[key]))
   }
+  for (const key of computerFields) {
+    const field = `ekko${key[0].toUpperCase()}${key.slice(1)}` as keyof typeof computerOptions
+    if (key.endsWith('Enabled')) {
+      const control = page.getByRole('switch', { name: en.jev[key], exact: true })
+      await expect(control).not.toBeChecked()
+      await control.click()
+    } else await page.getByLabel(en.jev[key], { exact: true }).fill(String(computerOptions[field]))
+  }
   await page.getByLabel('JEV API Key', { exact: true }).fill('new-research-key')
   await page.getByLabel('JEV Model', { exact: true }).fill('jev-research')
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect(page.getByLabel('JEV API Key', { exact: true })).toHaveValue('')
-  expect(requests.find(r => r.method === 'PUT')).toMatchObject({ profile: 'research', body: { ...browserOptions, ekkoSkillsEnabled: true, ekkoSkillsCandidateLimit: 12, ekkoSkillsMinConfidence: 0.9, ekkoSkillsTimeoutMs: 1500, apiKey: 'new-research-key', model: 'jev-research', ekkoMemoryEnabled: true, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true, ekkoMemoryCandidateLimit: 7, ekkoMemoryRecallMinConfidence: 0.65, ekkoMemoryFilterMinConfidence: 0.85, ekkoMemoryMinConfidence: 0.9, ekkoMemoryTimeoutMs: 1200 } })
+  expect(requests.find(r => r.method === 'PUT')).toMatchObject({ profile: 'research', body: { ...computerOptions, ...browserOptions, ekkoSkillsEnabled: true, ekkoSkillsCandidateLimit: 12, ekkoSkillsMinConfidence: 0.9, ekkoSkillsTimeoutMs: 1500, apiKey: 'new-research-key', model: 'jev-research', ekkoMemoryEnabled: true, ekkoMemoryKindRoutingEnabled: true, ekkoMemoryRelevanceFilterEnabled: true, ekkoMemoryRerankEnabled: true, ekkoMemoryWriteReviewEnabled: true, ekkoMemoryCandidateLimit: 7, ekkoMemoryRecallMinConfidence: 0.65, ekkoMemoryFilterMinConfidence: 0.85, ekkoMemoryMinConfidence: 0.9, ekkoMemoryTimeoutMs: 1200 } })
   await expect(memorySwitch).toBeChecked()
   await expect(skillsSwitch).toBeChecked()
   await expect(page.locator('.jev-settings')).toContainText(en.jev.skillsReady)
   await expect(page.locator('.jev-settings')).toContainText(en.jev.memoryReady)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: testInfo.outputPath('jev-memory-settings.png'), fullPage: true })
+  await page.getByRole('region', { name: en.jev.computerUseAutomation, exact: true }).scrollIntoViewIfNeeded()
+  await page.getByRole('region', { name: en.jev.computerUseAutomation, exact: true }).screenshot({ path: testInfo.outputPath('jev-computer-use-settings.png') })
 
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect.poll(() => requests.filter(r => r.method === 'PUT').length).toBe(2)
@@ -156,6 +172,9 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   await expect(skillsSwitch).not.toBeChecked()
   await expect(matchSwitch).not.toBeChecked()
   await expect(verifySwitch).not.toBeChecked()
+  for (const key of ['computerUseMatchEnabled', 'computerUseVerifyEnabled'] as const) {
+    await expect(page.getByRole('switch', { name: en.jev[key], exact: true })).not.toBeChecked()
+  }
   await expect(page.getByLabel('JEV Model', { exact: true })).toHaveValue('jev-default')
   await expect(memorySwitch).not.toBeChecked()
   await expect(page.getByTestId('jev-test-result')).toHaveCount(0)
@@ -166,6 +185,11 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   await expect(verifySwitch).toBeChecked()
   for (const key of ['browserMatchCandidateLimit', 'browserMatchMinConfidence', 'browserMatchTimeoutMs', 'browserVerifyMinConfidence', 'browserVerifyTimeoutMs'] as const) {
     await expect(page.getByLabel(en.jev[key], { exact: true })).toHaveValue(String(browserOptions[key]))
+  }
+  for (const key of computerFields) {
+    const field = `ekko${key[0].toUpperCase()}${key.slice(1)}` as keyof typeof computerOptions
+    if (key.endsWith('Enabled')) await expect(page.getByRole('switch', { name: en.jev[key], exact: true })).toBeChecked()
+    else await expect(page.getByLabel(en.jev[key], { exact: true })).toHaveValue(String(computerOptions[field]))
   }
   await expect(page.getByLabel(en.jev.skillsCandidateLimit, { exact: true })).toHaveValue('12')
   await expect(page.getByLabel(en.jev.skillsMinConfidence, { exact: true })).toHaveValue('0.9')
@@ -185,6 +209,9 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   await memorySwitch.click()
   await page.getByRole('button', { name: 'Save', exact: true }).click()
   await expect.poll(() => settings.research.ekkoMemoryEnabled).toBe(false)
+  for (const key of ['computerUseMatchEnabled', 'computerUseVerifyEnabled'] as const) {
+    await page.getByRole('switch', { name: en.jev[key], exact: true }).click()
+  }
   await skillsSwitch.click()
   await matchSwitch.click()
   await verifySwitch.click()
@@ -193,6 +220,9 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   await page.reload()
   await expect(matchSwitch).not.toBeChecked()
   await expect(verifySwitch).not.toBeChecked()
+  await expect(page.getByRole('switch', { name: en.jev.computerUseMatchEnabled, exact: true })).not.toBeChecked()
+  await expect(page.getByRole('switch', { name: en.jev.computerUseVerifyEnabled, exact: true })).not.toBeChecked()
+  expect(settings.research.ekkoComputerUseMatchCandidateLimit).toBe(9)
   expect(settings.research.browserMatchCandidateLimit).toBe(12)
   expect(settings.research.browserVerifyMinConfidence).toBe(0.95)
   await expect(memorySwitch).not.toBeChecked()
@@ -207,7 +237,7 @@ test(`configures JEV memory, skills and browser per Profile at ${viewport.width}
   await expect(memorySwitch).not.toBeChecked()
   await expect(page.getByRole('button', { name: 'Test saved configuration', exact: true })).toBeDisabled()
   expect(settings.research.ekkoSkillsEnabled).toBe(false)
-  expect(settings.research).toMatchObject(browserDefaults)
+  expect(settings.research).toMatchObject({ ...computerDefaults, ...browserDefaults })
   expect(settings.research.ekkoSkillsCandidateLimit).toBe(20)
   expect(settings.default.model).toBe('jev-default')
   expect(await page.evaluate(() => localStorage.getItem('hermes_active_profile_name'))).toBe('default')
@@ -289,4 +319,68 @@ for (const width of [1280, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
   })
 }
+}
+
+for (const brightness of ['light', 'dark']) {
+  test(`Computer Use JEV controls follow ${brightness} theme, wallpaper and regional reset`, async ({ page }, testInfo) => {
+    test.setTimeout(60000)
+    await authenticate(page)
+    await mockHermesApi(page, { theme: { brightness, background: { name: 'wall.png', mime: 'image/png', updatedAt: 1 } } })
+    await page.route('**/api/studio/jev/settings', route => route.fulfill({ json: {
+      ...memoryDefaults, baseUrl: 'https://api.typesafe.ai', model: 'jev-latest', timeoutMs: 10000, hasApiKey: true, ekkoMemoryEnabled: false,
+    } }))
+    const path = '/#/hermes/models?tab=jev&modelProfile=default'
+    const group = page.getByRole('region', { name: en.jev.computerUseAutomation, exact: true })
+    const cards = group.locator('[data-theme-surface="card"]')
+    const wallpaperBg = brightness === 'dark' ? 'rgba(42, 42, 42, 0.72)' : 'rgba(255, 255, 255, 0.72)'
+    await page.goto(path)
+    await expect(cards).toHaveCount(2)
+    for (const card of await cards.all()) await expect(card).toHaveCSS('background-color', wallpaperBg)
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 })
+      const control = group.getByRole('switch', { name: en.jev.computerUseMatchEnabled, exact: true })
+      await control.click()
+      await expect(control).toBeChecked()
+      await control.click()
+      await expect(control).not.toBeChecked()
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await group.screenshot({ path: testInfo.outputPath(`computer-use-${brightness}-${width}.png`), animations: 'disabled' })
+    }
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/#/hermes/theme')
+    await page.getByTestId('theme-global-backgroundColor').fill('#223344')
+    await page.getByTestId('theme-global-opacity').fill('0.4')
+    await page.getByTestId('theme-global-opacity').dispatchEvent('change')
+    await page.getByTestId('theme-scope').selectOption('card')
+    await page.getByTestId('theme-card-backgroundColor').fill('#336699')
+    for (const [key, value] of [['opacity', '0.25'], ['blur', '12'], ['radius', '16']]) {
+      await page.getByTestId(`theme-card-${key}`).fill(value)
+      await page.getByTestId(`theme-card-${key}`).dispatchEvent('change')
+    }
+    await page.goto(path)
+    for (const card of await cards.all()) {
+      await expect(card).toHaveCSS('background-color', 'rgba(51, 102, 153, 0.25)')
+      await expect(card).toHaveCSS('backdrop-filter', 'blur(12px) saturate(1.1)')
+      await expect(card).toHaveCSS('border-radius', '16px')
+    }
+    await page.goto('/#/hermes/theme')
+    await page.getByTestId('theme-scope').selectOption('card')
+    await page.getByTestId('theme-card-opacity').fill('0')
+    await page.getByTestId('theme-card-opacity').dispatchEvent('change')
+    await page.goto(path)
+    for (const card of await cards.all()) {
+      await expect(card).toHaveCSS('background-color', 'rgba(51, 102, 153, 0)')
+      await expect(card).toHaveCSS('opacity', '1')
+    }
+    await page.goto('/#/hermes/theme')
+    await page.getByTestId('theme-scope').selectOption('card')
+    await page.getByRole('button', { name: 'Reset Background opacity', exact: true }).click()
+    await page.goto(path)
+    for (const card of await cards.all()) await expect(card).toHaveCSS('background-color', 'rgba(51, 102, 153, 0.4)')
+    await page.goto('/#/hermes/theme')
+    await page.getByRole('button', { name: 'Remove', exact: true }).click()
+    await page.getByRole('button', { name: 'Restore defaults', exact: true }).click()
+    await page.goto(path)
+    for (const card of await cards.all()) await expect(card).toHaveCSS('backdrop-filter', 'none')
+  })
 }

@@ -26,6 +26,13 @@ export interface JevSettings {
   browserVerifyMinConfidence: number
   browserVerifyTimeoutMs: number
 
+  ekkoComputerUseMatchEnabled: boolean
+  ekkoComputerUseMatchCandidateLimit: number
+  ekkoComputerUseMatchMinConfidence: number
+  ekkoComputerUseMatchTimeoutMs: number
+  ekkoComputerUseVerifyEnabled: boolean
+  ekkoComputerUseVerifyMinConfidence: number
+  ekkoComputerUseVerifyTimeoutMs: number
   ekkoSkillsEnabled: boolean
   ekkoSkillsCandidateLimit: number
   ekkoSkillsMinConfidence: number
@@ -75,6 +82,13 @@ const defaults: StoredSettings = {
   browserVerifyMinConfidence: 0.8,
   browserVerifyTimeoutMs: 3000,
 
+  ekkoComputerUseMatchEnabled: false,
+  ekkoComputerUseMatchCandidateLimit: 20,
+  ekkoComputerUseMatchMinConfidence: 0.8,
+  ekkoComputerUseMatchTimeoutMs: 3000,
+  ekkoComputerUseVerifyEnabled: false,
+  ekkoComputerUseVerifyMinConfidence: 0.8,
+  ekkoComputerUseVerifyTimeoutMs: 3000,
   ekkoSkillsEnabled: false,
   ekkoSkillsCandidateLimit: 20,
   ekkoSkillsMinConfidence: 0.8,
@@ -103,7 +117,7 @@ function settingsPath(profile: string): string {
 function normalize(input: unknown, current = defaults): StoredSettings {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new JevError('Invalid JEV settings')
   const value = input as Record<string, unknown>
-  if (Object.keys(value).some(key => !['browserMatchEnabled', 'browserMatchCandidateLimit', 'browserMatchMinConfidence', 'browserMatchTimeoutMs', 'browserVerifyEnabled', 'browserVerifyMinConfidence', 'browserVerifyTimeoutMs', 'groupSummaryReviewEnabled', 'groupSummaryReviewMinConfidence', 'groupSummaryRevisionEnabled', 'groupSummaryReviewTimeoutMs', 'workflowQualityEnabled', 'workflowQualityMinConfidence', 'workflowQualityTimeoutMs', 'groupMessageRoutingEnabled', 'groupHandoffReviewEnabled', 'groupLoopDetectionEnabled', 'groupMessageRoutingMinConfidence', 'groupMessageRoutingMode', 'groupMessageRoutingTimeoutMs', 'baseUrl', 'model', 'timeoutMs', 'apiKey', 'ekkoSkillsEnabled', 'ekkoSkillsCandidateLimit', 'ekkoSkillsMinConfidence', 'ekkoSkillsTimeoutMs', 'ekkoMemoryEnabled', 'ekkoMemoryKindRoutingEnabled', 'ekkoMemoryRelevanceFilterEnabled', 'ekkoMemoryRerankEnabled', 'ekkoMemoryWriteReviewEnabled', 'ekkoMemoryCandidateLimit', 'ekkoMemoryRecallMinConfidence', 'ekkoMemoryFilterMinConfidence', 'ekkoMemoryMinConfidence', 'ekkoMemoryTimeoutMs'].includes(key))) {
+  if (Object.keys(value).some(key => !['ekkoComputerUseMatchEnabled', 'ekkoComputerUseMatchCandidateLimit', 'ekkoComputerUseMatchMinConfidence', 'ekkoComputerUseMatchTimeoutMs', 'ekkoComputerUseVerifyEnabled', 'ekkoComputerUseVerifyMinConfidence', 'ekkoComputerUseVerifyTimeoutMs', 'browserMatchEnabled', 'browserMatchCandidateLimit', 'browserMatchMinConfidence', 'browserMatchTimeoutMs', 'browserVerifyEnabled', 'browserVerifyMinConfidence', 'browserVerifyTimeoutMs', 'groupSummaryReviewEnabled', 'groupSummaryReviewMinConfidence', 'groupSummaryRevisionEnabled', 'groupSummaryReviewTimeoutMs', 'workflowQualityEnabled', 'workflowQualityMinConfidence', 'workflowQualityTimeoutMs', 'groupMessageRoutingEnabled', 'groupHandoffReviewEnabled', 'groupLoopDetectionEnabled', 'groupMessageRoutingMinConfidence', 'groupMessageRoutingMode', 'groupMessageRoutingTimeoutMs', 'baseUrl', 'model', 'timeoutMs', 'apiKey', 'ekkoSkillsEnabled', 'ekkoSkillsCandidateLimit', 'ekkoSkillsMinConfidence', 'ekkoSkillsTimeoutMs', 'ekkoMemoryEnabled', 'ekkoMemoryKindRoutingEnabled', 'ekkoMemoryRelevanceFilterEnabled', 'ekkoMemoryRerankEnabled', 'ekkoMemoryWriteReviewEnabled', 'ekkoMemoryCandidateLimit', 'ekkoMemoryRecallMinConfidence', 'ekkoMemoryFilterMinConfidence', 'ekkoMemoryMinConfidence', 'ekkoMemoryTimeoutMs'].includes(key))) {
     throw new JevError('Unknown JEV setting')
   }
   const next = { ...current }
@@ -116,6 +130,20 @@ function normalize(input: unknown, current = defaults): StoredSettings {
     if (typeof value[key] !== 'boolean') throw new JevError(`Invalid JEV ${key}`)
     next[key] = value[key]
   }
+  if (value.ekkoComputerUseMatchEnabled !== undefined) next.ekkoComputerUseMatchEnabled = value.ekkoComputerUseMatchEnabled as boolean
+  if (value.ekkoComputerUseMatchCandidateLimit !== undefined) next.ekkoComputerUseMatchCandidateLimit = value.ekkoComputerUseMatchCandidateLimit as number
+  if (value.ekkoComputerUseMatchMinConfidence !== undefined) next.ekkoComputerUseMatchMinConfidence = value.ekkoComputerUseMatchMinConfidence as number
+  if (value.ekkoComputerUseMatchTimeoutMs !== undefined) next.ekkoComputerUseMatchTimeoutMs = value.ekkoComputerUseMatchTimeoutMs as number
+  if (value.ekkoComputerUseVerifyEnabled !== undefined) next.ekkoComputerUseVerifyEnabled = value.ekkoComputerUseVerifyEnabled as boolean
+  if (value.ekkoComputerUseVerifyMinConfidence !== undefined) next.ekkoComputerUseVerifyMinConfidence = value.ekkoComputerUseVerifyMinConfidence as number
+  if (value.ekkoComputerUseVerifyTimeoutMs !== undefined) next.ekkoComputerUseVerifyTimeoutMs = value.ekkoComputerUseVerifyTimeoutMs as number
+  if (typeof next.ekkoComputerUseMatchEnabled !== 'boolean') throw new JevError('Invalid JEV ekkoComputerUseMatchEnabled')
+  if (!Number.isInteger(next.ekkoComputerUseMatchCandidateLimit) || next.ekkoComputerUseMatchCandidateLimit < 1 || next.ekkoComputerUseMatchCandidateLimit > 50) throw new JevError('Invalid JEV ekkoComputerUseMatchCandidateLimit')
+  if (!Number.isFinite(next.ekkoComputerUseMatchMinConfidence) || next.ekkoComputerUseMatchMinConfidence < 0.5 || next.ekkoComputerUseMatchMinConfidence > 1) throw new JevError('Invalid JEV ekkoComputerUseMatchMinConfidence')
+  if (!Number.isInteger(next.ekkoComputerUseMatchTimeoutMs) || next.ekkoComputerUseMatchTimeoutMs < 100 || next.ekkoComputerUseMatchTimeoutMs > 30000) throw new JevError('Invalid JEV ekkoComputerUseMatchTimeoutMs')
+  if (typeof next.ekkoComputerUseVerifyEnabled !== 'boolean') throw new JevError('Invalid JEV ekkoComputerUseVerifyEnabled')
+  if (!Number.isFinite(next.ekkoComputerUseVerifyMinConfidence) || next.ekkoComputerUseVerifyMinConfidence < 0.5 || next.ekkoComputerUseVerifyMinConfidence > 1) throw new JevError('Invalid JEV ekkoComputerUseVerifyMinConfidence')
+  if (!Number.isInteger(next.ekkoComputerUseVerifyTimeoutMs) || next.ekkoComputerUseVerifyTimeoutMs < 100 || next.ekkoComputerUseVerifyTimeoutMs > 30000) throw new JevError('Invalid JEV ekkoComputerUseVerifyTimeoutMs')
   if (value.browserMatchCandidateLimit !== undefined) next.browserMatchCandidateLimit = value.browserMatchCandidateLimit as number
   if (!Number.isInteger(next.browserMatchCandidateLimit) || next.browserMatchCandidateLimit < 1 || next.browserMatchCandidateLimit > 50) throw new JevError('Invalid JEV browserMatchCandidateLimit')
   if (value.browserMatchMinConfidence !== undefined) next.browserMatchMinConfidence = value.browserMatchMinConfidence as number
@@ -174,6 +202,8 @@ function normalize(input: unknown, current = defaults): StoredSettings {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new JevError('JEV base URL must use HTTP(S) without credentials, query or fragment')
   }
+  // The SDK appends /v1/systemone; accept versioned bases and complete endpoints too.
+  url.pathname = url.pathname.replace(/\/+$/, '').replace(/\/v1(?:\/systemone)?$/, '') || '/'
   next.baseUrl = url.toString().replace(/\/+$/, '')
   if (/[\r\n]/.test(next.apiKey)) throw new JevError('Invalid JEV API key')
   return next
@@ -184,6 +214,13 @@ function publicSettings(value: StoredSettings): JevSettings {
     groupMessageRoutingEnabled: value.groupMessageRoutingEnabled, groupHandoffReviewEnabled: value.groupHandoffReviewEnabled, groupLoopDetectionEnabled: value.groupLoopDetectionEnabled, groupMessageRoutingMinConfidence: value.groupMessageRoutingMinConfidence, groupMessageRoutingMode: value.groupMessageRoutingMode, groupMessageRoutingTimeoutMs: value.groupMessageRoutingTimeoutMs,
     workflowQualityEnabled: value.workflowQualityEnabled, workflowQualityMinConfidence: value.workflowQualityMinConfidence, workflowQualityTimeoutMs: value.workflowQualityTimeoutMs,
     groupSummaryReviewEnabled: value.groupSummaryReviewEnabled, groupSummaryReviewMinConfidence: value.groupSummaryReviewMinConfidence, groupSummaryRevisionEnabled: value.groupSummaryRevisionEnabled, groupSummaryReviewTimeoutMs: value.groupSummaryReviewTimeoutMs,
+    ekkoComputerUseMatchEnabled: value.ekkoComputerUseMatchEnabled,
+    ekkoComputerUseMatchCandidateLimit: value.ekkoComputerUseMatchCandidateLimit,
+    ekkoComputerUseMatchMinConfidence: value.ekkoComputerUseMatchMinConfidence,
+    ekkoComputerUseMatchTimeoutMs: value.ekkoComputerUseMatchTimeoutMs,
+    ekkoComputerUseVerifyEnabled: value.ekkoComputerUseVerifyEnabled,
+    ekkoComputerUseVerifyMinConfidence: value.ekkoComputerUseVerifyMinConfidence,
+    ekkoComputerUseVerifyTimeoutMs: value.ekkoComputerUseVerifyTimeoutMs,
     browserMatchEnabled: value.browserMatchEnabled,
     browserMatchCandidateLimit: value.browserMatchCandidateLimit,
     browserMatchMinConfidence: value.browserMatchMinConfidence,
@@ -211,8 +248,15 @@ export async function getJevSettings(profile: string): Promise<JevSettings> {
 
 /** Server-only host configuration for agent runtimes; never return this from an HTTP endpoint. */
 export async function getJevRuntimeConfig(profile: string) {
-  const { ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled, ekkoMemoryWriteReviewEnabled, ekkoMemoryCandidateLimit, ekkoMemoryRecallMinConfidence, ekkoMemoryFilterMinConfidence, ekkoMemoryMinConfidence, ekkoMemoryTimeoutMs, apiKey, baseUrl, model, timeoutMs } = await readJevCredentials(profile)
+  const { ekkoComputerUseMatchEnabled, ekkoComputerUseMatchCandidateLimit, ekkoComputerUseMatchMinConfidence, ekkoComputerUseMatchTimeoutMs, ekkoComputerUseVerifyEnabled, ekkoComputerUseVerifyMinConfidence, ekkoComputerUseVerifyTimeoutMs, ekkoSkillsEnabled, ekkoSkillsCandidateLimit, ekkoSkillsMinConfidence, ekkoSkillsTimeoutMs, ekkoMemoryEnabled, ekkoMemoryKindRoutingEnabled, ekkoMemoryRelevanceFilterEnabled, ekkoMemoryRerankEnabled, ekkoMemoryWriteReviewEnabled, ekkoMemoryCandidateLimit, ekkoMemoryRecallMinConfidence, ekkoMemoryFilterMinConfidence, ekkoMemoryMinConfidence, ekkoMemoryTimeoutMs, apiKey, baseUrl, model, timeoutMs } = await readJevCredentials(profile)
   return { apiKey, baseUrl, model, timeoutMs, enabled: Boolean(apiKey), memoryEnabled: ekkoMemoryEnabled,
+    computerUseMatchEnabled: ekkoComputerUseMatchEnabled,
+    computerUseMatchCandidateLimit: ekkoComputerUseMatchCandidateLimit,
+    computerUseMatchMinConfidence: ekkoComputerUseMatchMinConfidence,
+    computerUseMatchTimeoutMs: ekkoComputerUseMatchTimeoutMs,
+    computerUseVerifyEnabled: ekkoComputerUseVerifyEnabled,
+    computerUseVerifyMinConfidence: ekkoComputerUseVerifyMinConfidence,
+    computerUseVerifyTimeoutMs: ekkoComputerUseVerifyTimeoutMs,
     skillsEnabled: ekkoSkillsEnabled,
     skillsCandidateLimit: ekkoSkillsCandidateLimit,
     skillsMinConfidence: ekkoSkillsMinConfidence,

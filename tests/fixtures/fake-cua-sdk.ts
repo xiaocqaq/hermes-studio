@@ -43,7 +43,7 @@ export class FakeCuaSdkDriver {
     if (name === 'check_permissions') Object.assign(value, { accessibility: true, screen_recording: true })
     if (name === 'get_window_state' || name === 'get_desktop_state') {
       this.capture++
-      Object.assign(value, { capture: this.capture, snapshot_id: `s${this.capture}`, screenshot_scale: 0.5, window_bounds: { x: 0, y: 0, width: 1600, height: 900 }, elements: [{ element_token: `s${this.capture}:1`, role: 'button', label: 'Fixture' }] })
+      Object.assign(value, { pid: args.pid, window_id: args.window_id, capture: this.capture, snapshot_id: `s${this.capture}`, screenshot_scale: 0.5, window_bounds: { x: 0, y: 0, width: 1600, height: 900 }, elements: [{ element_token: `s${this.capture}:1`, role: 'button', label: 'Fixture' }] })
       return { rawJson: JSON.stringify({ content: [
         { type: 'text', text: `snapshot_id=s${this.capture} elements=1` },
         ...(args.include_screenshot === false ? [] : [{ type: 'image', mimeType: 'image/png', data: png }]),

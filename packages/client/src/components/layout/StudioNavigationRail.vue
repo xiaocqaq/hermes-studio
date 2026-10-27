@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { deploymentUrl } from '@/utils/deployment-url'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'

@@ -47,6 +47,21 @@ function requestKey(index = 0): string | null {
 }
 
 describe('Ekko JEV configuration', () => {
+  it('defaults Computer Use JEV off and preserves local config under runtime overrides', () => {
+    expect(normalizeEkkoConfig({ jev: { enabled: true, apiKey: 'legacy' } }).jev).toMatchObject({ computerUseMatchEnabled: false, computerUseVerifyEnabled: false })
+    const agent = create({ config: { jev: { enabled: true, apiKey: 'local', computerUseMatchEnabled: true } }, jev: { computerUseMatchEnabled: false, computerUseVerifyEnabled: true } })
+    expect(agent.default.runtime.create().jev.settings).toMatchObject({ computerUseMatchEnabled: false, computerUseVerifyEnabled: true })
+    expect(agent.readConfig().jev).toMatchObject({ computerUseMatchEnabled: true, computerUseVerifyEnabled: false })
+  })
+
+  it.each([{ computerUseMatchEnabled: 'true' }, { computerUseVerifyEnabled: null },
+    { computerUseMatchCandidateLimit: 0 }, { computerUseMatchCandidateLimit: 51 },
+    { computerUseMatchMinConfidence: NaN }, { computerUseVerifyMinConfidence: 1.1 },
+    { computerUseMatchTimeoutMs: 99 }, { computerUseVerifyTimeoutMs: 30001 },
+  ])('rejects invalid Computer Use JEV config %j', input => {
+    expect(() => normalizeEkkoConfig({ jev: input } as any)).toThrow(EkkoConfigError)
+  })
+
   it('defaults legacy skill enhancement off and preserves explicit host overrides without write-back', () => {
     const legacy = normalizeEkkoConfig({ schemaVersion: 13, jev: { enabled: true, apiKey: 'local-key', memoryEnabled: true } })
     expect(legacy.jev).toMatchObject({ skillsEnabled: false, skillsCandidateLimit: 20, skillsMinConfidence: 0.8, skillsTimeoutMs: 3000, memoryEnabled: true })
@@ -175,15 +190,26 @@ describe('Ekko JEV configuration', () => {
 })
 
 describe('Ekko internal JEV client', () => {
-  it('evaluates typed questions using its own SDK client and exposes only redacted settings', async () => {
-    const client = new EkkoJevClient({ enabled: true, apiKey: 'private-key', baseUrl: 'https://jev.example.test/', model: 'jev-configured' })
+  it.each([
+    ['https://jev.example.test/', 'https://jev.example.test'],
+    ['https://jev.example.test/v1', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/systemone', 'https://jev.example.test'],
+    ['https://jev.example.test/v1/systemone/', 'https://jev.example.test'],
+    ['https://jev.example.test/gateway', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/gateway/v1/', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/gateway/v1/systemone/', 'https://jev.example.test/gateway'],
+    ['https://jev.example.test/v1/systemone/gateway/', 'https://jev.example.test/v1/systemone/gateway'],
+  ])('evaluates typed questions at %s and redacts credentials', async (baseUrl, root) => {
+    const client = new EkkoJevClient({ enabled: true, apiKey: 'private-key', baseUrl, model: 'jev-configured' })
     expect(await client.evaluate({ state: { text: 'example' }, questions, model: 'jev-override' })).toEqual(response)
     const [url, init] = upstream.mock.calls[0]
-    expect(url).toBe('https://jev.example.test/v1/systemone')
+    expect(url).toBe(`${root}/v1/systemone`)
     expect(init?.redirect).toBe('error')
     expect(JSON.parse(init!.body as string)).toEqual({ state: { text: 'example' }, questions, model: 'jev-override' })
     expect(JSON.stringify(client.settings)).not.toContain('private-key')
     expect(JSON.stringify(client)).not.toContain('private-key')
+    expect(client.settings.baseUrl).toBe(root)
   })
 
   it('preserves an in-flight request snapshot across configuration replacement', async () => {
