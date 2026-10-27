@@ -12,7 +12,7 @@
 #   bash scripts/deploy-frontend-local.sh --force         # 即使入口 bundle 没变也发
 #   bash scripts/deploy-frontend-local.sh --skip-build    # 复用现有 dist/client
 #   bash scripts/deploy-frontend-local.sh --check         # 发布前先跑 client 测试 + 类型检查
-#   bash scripts/deploy-frontend-local.sh --keep 5        # 保留最近几个 release（默认 5）
+#   bash scripts/deploy-frontend-local.sh --keep 3        # 保留最近几个 release（默认 3，见 KEEP 处注释）
 #   bash scripts/deploy-frontend-local.sh --dry-run       # 只构建 + 检查，不发布
 #
 # 只发前端：不跑 npm、不 restart hermes-webui，用户正在跑的 agent 会话不受影响。
@@ -24,7 +24,7 @@ set -euo pipefail
 SITE='hs.mxiao.top'
 RECEIVER="${RECEIVER:-/usr/local/sbin/hermes-frontend-release}"
 INCOMING_DIR="${INCOMING_DIR:-/var/lib/hermes-deploy/incoming}"
-KEEP=5
+KEEP=3   # 接收端清理旧 release 的保留数；实际有效上限也是 3：disk-watchdog 的 6d 段会把超出最新 3 个的 release 裁掉
 SKIP_BUILD=0
 FORCE=0
 DO_CHECK=0
