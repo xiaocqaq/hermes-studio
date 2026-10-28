@@ -5,6 +5,7 @@ import { useAccountStore } from "@/stores/account";
 import { NButton, NInput, NModal, NForm, NFormItem, NPopconfirm, useMessage } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { changePassword, changeUsername, fetchLockedIps, unlockSpecificIp, unlockAllIps, updateMyAvatar, resetMyAvatar } from "@/api/studio/auth";
+import { isStoredSuperAdmin } from "@/api/client";
 import type { LockedIp } from "@/api/studio/auth";
 import ProfileAvatar from "@/components/hermes/profiles/ProfileAvatar.vue";
 import boring from "boring-avatars-vanilla";
@@ -186,11 +187,17 @@ function openChangeUsernameModal() {
   showChangeUsernameModal.value = true;
 }
 
-// Locked IPs management
+// Locked IPs management.
+// GET/DELETE /api/auth/locked-ips are requireSuperAdmin on the server, and the
+// shared request() dispatches a global "forbidden" toast on every 403 before it
+// throws -- a plain admin cannot swallow it in this component's catch. So the
+// section is super_admin-only, same gate as the Users/Webhooks settings tabs.
+const isSuperAdmin = isStoredSuperAdmin();
 const lockedIps = ref<LockedIp[]>([]);
 const loadingLocks = ref(false);
 
 async function loadLockedIps() {
+  if (!isSuperAdmin) return;
   loadingLocks.value = true;
   try {
     lockedIps.value = await fetchLockedIps();
@@ -229,7 +236,9 @@ function lockedIpTypeLabel(type: LockedIp["type"]): string {
   return t(`settings.lockedIps.type.${type}`);
 }
 
-onMounted(() => { loadLockedIps(); });
+onMounted(() => {
+  if (isSuperAdmin) void loadLockedIps();
+});
 </script>
 
 <template>
@@ -275,8 +284,8 @@ onMounted(() => { loadLockedIps(); });
       </div>
     </div>
 
-    <!-- Locked IPs management -->
-    <div class="locked-ips-section">
+    <!-- Locked IPs management (super_admin only: the API is requireSuperAdmin) -->
+    <div v-if="isSuperAdmin" class="locked-ips-section">
       <h3 class="section-title">{{ t("settings.lockedIps.title") }}</h3>
       <div class="action-row" style="margin-bottom: 12px;">
         <span class="action-label">{{ t("settings.lockedIps.count", { count: lockedIps.length }) }}</span>
