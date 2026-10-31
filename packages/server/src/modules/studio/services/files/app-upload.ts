@@ -4,7 +4,17 @@ import { basename, extname, join } from 'path'
 import { getProfileUploadDir } from './upload-paths'
 
 export const APP_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
-export const APP_UPLOAD_CHUNK_BYTES = 256 * 1024
+// 8MB per chunk: large attachments stay fast (500MB = ~63 requests) while each
+// request keeps its bounded in-memory buffer.
+export const APP_UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+
+// Operators can raise the limit for large-file workflows via
+// HERMES_MAX_UPLOAD_SIZE (bytes); the legacy multipart route reads the same
+// variable so both upload paths agree.
+export function getAppUploadMaxBytes(): number {
+  const override = Number(process.env.HERMES_MAX_UPLOAD_SIZE)
+  return Number.isFinite(override) && override > 0 ? override : APP_UPLOAD_MAX_BYTES
+}
 const APP_UPLOAD_SESSION_TTL_MS = 5 * 60 * 1000
 const UPLOAD_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
 
@@ -55,8 +65,9 @@ export async function openAppUpload(input: {
   const name = safeDisplayName(input.name)
   const size = Number(input.size)
   if (!Number.isSafeInteger(size) || size < 0) throw new AppUploadError('invalid_upload_size', 'Invalid upload size')
-  if (size > APP_UPLOAD_MAX_BYTES) {
-    throw new AppUploadError('upload_too_large', 'File is too large (max 50MB)', 413)
+  const maxBytes = getAppUploadMaxBytes()
+  if (size > maxBytes) {
+    throw new AppUploadError('upload_too_large', `File is too large (max ${Math.round(maxBytes / 1024 / 1024)}MB)`, 413)
   }
 
   const uploadDir = input.uploadDir || getProfileUploadDir(input.profile)

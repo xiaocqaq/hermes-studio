@@ -13,7 +13,7 @@ import { setModelContext } from '@/api/hermes/model-context'
 import { fetchSkills, type SkillCategory, type SkillInfo } from '@/api/hermes/skills'
 import { deleteSkillBundleApi, fetchSkillBundles, type SkillBundleInfo } from '@/api/hermes/skill-bundles'
 import { NSpin, NButton, NTooltip, NModal, NInputNumber, NPopover, NSlider, NDropdown, useDialog, useMessage, type DropdownOption } from 'naive-ui'
-import { computed, ref, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
+import { computed, ref, reactive, nextTick, onMounted, onUnmounted, watch, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToolTraceVisibility } from '@/composables/useToolTraceVisibility'
 import { extractClipboardFiles } from '@/utils/clipboard-files'
@@ -25,6 +25,7 @@ import { normalizeComposerVoiceTranscript, useComposerVoiceInput } from '@/compo
 import { extractRepresentativeVideoFrames, isVideoFile } from '@/utils/video-frame-extraction'
 import ImagePreviewOverlay from './ImagePreviewOverlay.vue'
 import ScreenshotButton from './ScreenshotButton.vue'
+import { abortChunkedUpload, uploadFileInChunks } from '@/api/studio/app-uploads'
 
 const chatStore = useChatStore()
 const appStore = useAppStore()
@@ -921,26 +922,82 @@ function formatTokens(n: number | null): string {
 
 // --- File attachment helpers ---
 
+const pendingUploads = new Map<string, { promise: Promise<void>; abort: () => void }>()
+
+/**
+ * Start the chunked upload as soon as the file is attached, so the composer
+ * shows real progress and the send path only has to wait, not upload.
+ */
+function startAttachmentUpload(attachment: Attachment) {
+  const file = attachment.file
+  if (!file) return
+  pendingUploads.get(attachment.id)?.abort()
+  let sessionId = ''
+  const controller = new AbortController()
+  attachment.upload = { status: 'uploading', progress: 0 }
+  let settle: () => void = () => undefined
+  const promise = new Promise<void>((resolve) => { settle = resolve })
+  pendingUploads.set(attachment.id, {
+    promise,
+    abort: () => {
+      controller.abort()
+      if (sessionId) void abortChunkedUpload(sessionId, profilesStore.activeProfileName)
+    },
+  })
+  uploadFileInChunks(file, {
+    profile: profilesStore.activeProfileName,
+    signal: controller.signal,
+    onSessionId: (id) => { sessionId = id },
+    onProgress: (percent) => {
+      const state = attachment.upload
+      if (!state || state.status !== 'uploading') return
+      state.progress = Math.max(state.progress, Math.min(99, Math.round(percent)))
+    },
+  }).then((result) => {
+    attachment.upload = { status: 'done', progress: 100, path: result.path }
+  }).catch((error: unknown) => {
+    if (controller.signal.aborted) {
+      attachment.upload = undefined
+      return
+    }
+    attachment.upload = {
+      status: 'error',
+      progress: attachment.upload?.progress ?? 0,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }).finally(() => {
+    pendingUploads.delete(attachment.id)
+    settle()
+  })
+}
+
+function retryAttachmentUpload(attachment: Attachment) {
+  pendingUploads.get(attachment.id)?.abort()
+  pendingUploads.delete(attachment.id)
+  startAttachmentUpload(attachment)
+}
+
 function addFile(file: File) {
   if (attachments.value.find(a => a.name === file.name)) return
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-  const url = URL.createObjectURL(file)
-  attachments.value.push({
+  const attachment = reactive<Attachment>({
     id,
     name: file.name,
     type: file.type,
     size: file.size,
-    url,
+    url: URL.createObjectURL(file),
     file,
   })
+  attachments.value.push(attachment)
+  startAttachmentUpload(attachment)
   if (!isVideoFile(file)) return
 
   let job: Promise<void>
   job = extractRepresentativeVideoFrames(file)
     .then((frames) => {
-      if (!attachments.value.some(attachment => attachment.id === id)) return
+      if (!attachments.value.some(item => item.id === id)) return
       for (const frame of frames) {
-        attachments.value.push({
+        const frameAttachment = reactive<Attachment>({
           id: `${id}-frame-${attachments.value.length}`,
           name: frame.name,
           type: frame.type,
@@ -949,6 +1006,8 @@ function addFile(file: File) {
           file: frame,
           videoFrameFor: id,
         })
+        attachments.value.push(frameAttachment)
+        startAttachmentUpload(frameAttachment)
       }
     })
     .catch(() => {
@@ -1050,6 +1109,19 @@ async function handleSend() {
     } finally {
       sendAwaitingAttachments = false
     }
+  }
+  if (pendingUploads.size > 0) {
+    submitting.value = true
+    try {
+      await Promise.all([...pendingUploads.values()].map(item => item.promise))
+    } finally {
+      submitting.value = false
+    }
+  }
+  const failedUploads = attachments.value.filter(item => item.upload?.status === 'error')
+  if (failedUploads.length > 0) {
+    message.error(failedUploads[0].upload?.error || failedUploads[0].name)
+    return
   }
   const text = inputText.value.trim()
   if (!text && attachments.value.length === 0) return
@@ -1170,6 +1242,10 @@ function removeAttachment(id: string) {
   for (const attachment of attachments.value) {
     if (attachment.videoFrameFor === id) removedIds.add(attachment.id)
   }
+  for (const removedId of removedIds) {
+    pendingUploads.get(removedId)?.abort()
+    pendingUploads.delete(removedId)
+  }
   const removed = attachments.value.filter(attachment => removedIds.has(attachment.id))
   if (previewAttachment.value && removedIds.has(previewAttachment.value.id)) {
     previewAttachment.value = null
@@ -1225,6 +1301,27 @@ function openAttachmentPreview(attachment: Attachment) {
           <summary>{{ t('browser.selectionData') }}</summary>
           <pre>{{ att.context }}</pre>
         </details>
+        <div
+          v-if="att.upload && att.upload.status === 'uploading'"
+          class="attachment-upload-state"
+          role="progressbar"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          :aria-valuenow="att.upload.progress"
+        >
+          <span class="attachment-upload-percent">{{ att.upload.progress }}%</span>
+          <span class="attachment-upload-bar" :style="{ width: `${att.upload.progress}%` }"></span>
+        </div>
+        <button
+          v-else-if="att.upload && att.upload.status === 'error'"
+          type="button"
+          class="attachment-upload-retry"
+          :title="att.upload.error"
+          :aria-label="att.name"
+          @click.stop="retryAttachmentUpload(att)"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
         <button class="attachment-remove" @click="removeAttachment(att.id)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
@@ -2277,6 +2374,53 @@ function openAttachmentPreview(attachment: Attachment) {
   .attachment-preview:hover & {
     opacity: 1;
   }
+}
+
+.attachment-upload-state {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* theme-exception: state -- Progress scrim is only visible while this attachment is uploading. */
+  background: rgba(var(--bg-primary-rgb), 0.45);
+  pointer-events: none;
+
+  .attachment-upload-percent {
+    position: relative;
+    z-index: 1;
+    font-size: calc(var(--font-size-base, 14px) * 9 / 14);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-on-overlay);
+  }
+
+  .attachment-upload-bar {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    background: $accent-primary;
+    transition: width 120ms linear;
+  }
+}
+
+.attachment-upload-retry {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: $error;
+  color: var(--text-on-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 
 .file-input-hidden {

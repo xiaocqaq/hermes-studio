@@ -82,6 +82,16 @@ vi.mock('@/composables/useToolTraceVisibility', () => ({
   useToolTraceVisibility: () => ({ toolTraceVisible: { value: true }, toggleToolTraceVisible: vi.fn() }),
 }))
 
+const uploadFileInChunksMock = vi.hoisted(() => vi.fn(async (file: File) => ({
+  name: file.name,
+  path: `/tmp/uploads/${file.name}`,
+})))
+
+vi.mock('@/api/studio/app-uploads', () => ({
+  uploadFileInChunks: uploadFileInChunksMock,
+  abortChunkedUpload: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/utils/video-frame-extraction', async (importOriginal) => {
   const original = await importOriginal<typeof import('@/utils/video-frame-extraction')>()
   return {
@@ -356,6 +366,37 @@ describe('ChatInput draft persistence', () => {
         videoFrameFor: expect.any(String),
       }),
     ])
+  })
+
+  it('starts a chunked upload on attach, shows progress and waits before sending', async () => {
+    const wrapper = mountForSession('session-upload')
+    const chatStore = useChatStore()
+    const sendMessage = vi.spyOn(chatStore, 'sendMessage').mockResolvedValue(undefined)
+    uploadFileInChunksMock.mockClear()
+    let resolveUpload!: (value: { name: string; path: string }) => void
+    uploadFileInChunksMock.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveUpload = resolve
+    }))
+    const file = new File(['payload'], 'big.bin', { type: 'application/octet-stream' })
+    const input = wrapper.get('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+
+    await input.trigger('change')
+    await nextTick()
+
+    expect(uploadFileInChunksMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('.attachment-upload-state').exists()).toBe(true)
+
+    await wrapper.get('.send-button').trigger('click')
+    await flushPromises()
+    expect(sendMessage).not.toHaveBeenCalled()
+
+    resolveUpload({ name: 'big.bin', path: '/tmp/uploads/big.bin' })
+    await flushPromises()
+    await nextTick()
+
+    expect(wrapper.find('.attachment-upload-state').exists()).toBe(false)
+    expect(sendMessage).toHaveBeenCalled()
   })
 
   it('restores unsent text for the active session after the chat view is remounted', async () => {

@@ -1,4 +1,5 @@
-import { deploymentUrl } from '@/utils/deployment-url'
+// Merge: 0.8.0 uses PERSON_AVATAR (person notifications); the WIP chunked-upload
+// rewrite dropped the last deploymentUrl() use in this store, so it is not imported.
 import { chatSessionAgentAvatar, PERSON_AVATAR } from '@/utils/chat-agent-avatar'
 import { deleteSessionMessages, type MessageDeletionResult } from '@/api/studio/sessions'
 import { isNativeCodingAgent } from '@/utils/agent-catalog'
@@ -12,6 +13,7 @@ import { getActiveProfileName } from '@/api/client'
 import { onAuthInvalidated } from '@/api/auth-invalidation'
 import { inferCodingAgentApiMode, normalizeCodingAgentApiMode, type ChatCodingAgentId } from '@/api/coding-agents'
 import { getDownloadUrl } from '@/api/studio/download'
+import { uploadFileInChunks } from '@/api/studio/app-uploads'
 import type { ProviderApiMode } from '@/api/studio/provider-api-mode'
 import { defineStore, getActivePinia } from 'pinia'
 import { ref, computed, onScopeDispose, hasInjectionContext, inject, provide, type InjectionKey } from 'vue'
@@ -34,7 +36,6 @@ import {
   writeCachedSession,
   type CachedSessionSnapshot,
 } from '@/utils/hermes/message-cache'
-import { responseErrorMessage } from '@/utils/http-error'
 import {
   isPendingInteractionExpiredError,
   notifyPendingInteractionExpired,
@@ -97,6 +98,15 @@ function moaReferenceLabel(evt: RunEvent): string {
     : label
 }
 
+export interface AttachmentUpload {
+  status: 'uploading' | 'done' | 'error'
+  /** 0-100. Stays at 99 until the server confirms the completed upload. */
+  progress: number
+  /** Server-side stored path, set once status is 'done'. */
+  path?: string
+  error?: string
+}
+
 export interface Attachment {
   id: string
   name: string
@@ -104,6 +114,8 @@ export interface Attachment {
   size: number
   url: string
   file?: File
+  /** Eager chunked upload state; the composer starts this as soon as the file is attached. */
+  upload?: AttachmentUpload
   /** Structured context sent to the model but rendered collapsed in the UI. */
   context?: string
   /** Original video attachment id when this file is a model-only representative frame. */
@@ -635,23 +647,19 @@ function errorMessageText(error: unknown): string {
 
 export async function uploadFiles(attachments: Attachment[]): Promise<{ name: string; path: string }[]> {
   if (attachments.length === 0) return []
-  const formData = new FormData()
+  // Attachments are uploaded eagerly (chunked) from the composer; only files
+  // that have no completed upload yet are sent here. Result order must match
+  // the attachment order because buildContentBlocks pairs them by index.
+  const uploaded: { name: string; path: string }[] = []
   for (const att of attachments) {
-    if (att.file) formData.append('file', att.file, att.name)
+    if (att.upload?.status === 'done' && att.upload.path) {
+      uploaded.push({ name: att.name, path: att.upload.path })
+      continue
+    }
+    if (!att.file) throw new Error(`Attachment "${att.name}" failed to upload`)
+    uploaded.push(await uploadFileInChunks(att.file, { profile: getActiveProfileName() }))
   }
-  const token = localStorage.getItem('hermes_api_key') || ''
-  const profileName = getActiveProfileName()
-  const headers: Record<string, string> = {}
-  if (token) headers.Authorization = `Bearer ${token}`
-  if (profileName) headers['X-Hermes-Profile'] = profileName
-  const res = await fetch(deploymentUrl('/api/studio/uploads'), {
-    method: 'POST',
-    body: formData,
-    headers,
-  })
-  if (!res.ok) throw new Error(await responseErrorMessage(res, 'Upload failed'))
-  const data = await res.json() as { files: { name: string; path: string }[] }
-  return data.files
+  return uploaded
 }
 
 export async function buildContentBlocks(

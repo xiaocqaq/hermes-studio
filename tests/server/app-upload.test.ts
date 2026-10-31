@@ -67,4 +67,23 @@ describe('App chunked uploads', () => {
       bytes: Uint8Array.from([1]),
     })).rejects.toMatchObject({ code: 'invalid_upload_offset', status: 409 })
   })
+
+  it('honours HERMES_MAX_UPLOAD_SIZE for the chunked ceiling', async () => {
+    const { APP_UPLOAD_MAX_BYTES, abortAppUpload, openAppUpload } = await import(
+      '../../packages/server/src/modules/studio/services/files/app-upload'
+    )
+    vi.stubEnv('HERMES_MAX_UPLOAD_SIZE', String(APP_UPLOAD_MAX_BYTES * 4))
+    try {
+      await expect(openAppUpload({
+        id: 'upload_env_limit',
+        owner: '7',
+        profile: 'default',
+        name: 'big.bin',
+        size: APP_UPLOAD_MAX_BYTES * 2,
+      })).resolves.toMatchObject({ nextOffset: 0 })
+      await abortAppUpload({ id: 'upload_env_limit', owner: '7', profile: 'default' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })
