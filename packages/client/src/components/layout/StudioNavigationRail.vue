@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { deploymentUrl } from '@/utils/deployment-url'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -17,9 +16,12 @@ const canManageAgents = computed(() => isStoredSuperAdmin())
 // and `workflow` (工作流) are all removed on purpose — see
 // docs/harness/fork-customizations.md. Their routes still exist, so a bookmarked
 // URL keeps working; only the navigation surface is trimmed.
+// The account assistant (账号助理) is the second entry, right under 对话, and uses
+// the same monochrome line icon as the other rail entries instead of its colour
+// avatar — that keeps it visually in line with the rest of the rail.
 const entries = computed(() => [
-  { key: 'person', route: 'hermes.person', label: 'person.subtitle', avatar: deploymentUrl('/person/idle.gif') },
   { key: 'chat', route: 'hermes.chat', label: 'sidebar.singleChat', path: 'M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' },
+  { key: 'person', route: 'hermes.person', label: 'person.subtitle', path: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0' },
   { key: 'history', route: 'hermes.history', label: 'sidebar.history', path: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0M12 7v5l3 2' },
   ...(canManageAgents.value ? [{ key: 'agents', route: 'hermes.agentManager', label: 'sidebar.agentManager', path: 'M12 8V4H8M7 8h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3M2 14h2M20 14h2M9 13v2M15 13v2' }] : []),
   { key: 'models', route: 'hermes.models', label: 'sidebar.models', path: 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1' },
@@ -36,7 +38,7 @@ const activeKey = computed(() => {
 })
 const mobileNavigation = useMobileNavigation()
 function handleNavigate(key: string) {
-  if (mobileNavigation && ['agents', 'models', 'journey', 'usage'].includes(key)) {
+  if (mobileNavigation && ['person', 'agents', 'models', 'journey', 'usage'].includes(key)) {
     mobileNavigation.open.value = false
   }
 }
@@ -49,8 +51,7 @@ function handleNavigate(key: string) {
       <NTooltip v-for="entry in entries" :key="entry.key" placement="right" trigger="hover">
         <template #trigger>
           <RouteLinkItem class="studio-navigation-rail__item" :to="{ name: entry.route }" :active="activeKey === entry.key" :aria-label="t(entry.label)" @click="handleNavigate(entry.key)">
-            <img v-if="entry.avatar" class="studio-navigation-rail__avatar" :src="entry.avatar" width="32" height="32" alt="" aria-hidden="true" />
-            <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="entry.path" /></svg>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="entry.path" /></svg>
           </RouteLinkItem>
         </template>
         {{ t(entry.label) }}
@@ -103,8 +104,6 @@ function handleNavigate(key: string) {
   scrollbar-width: none;
 }
 .studio-navigation-rail__bottom { display: flex; flex-direction: column; gap: calc(8px * var(--spacing-scale, 1)); padding-top: 12px; }
-.api-relay-logo { border-radius: var(--radius-component, 4px); }
-.studio-navigation-rail__avatar { aspect-ratio: 1; flex-shrink: 0; border-radius: 4px; object-fit: contain; }
 .studio-navigation-rail__item {
   display: grid;
   place-items: center;
