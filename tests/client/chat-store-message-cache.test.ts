@@ -36,6 +36,7 @@ vi.mock('@/api/studio/chat', () => {
   })
   return {
     startRunViaSocket: vi.fn(() => ({ abort: vi.fn() })),
+    onUnobservedRunStarted: vi.fn(() => vi.fn()),
     resumeSession: vi.fn((sessionId: string, cb: (data: any) => void) => {
       cb({
         session_id: sessionId,
