@@ -205,12 +205,40 @@ grep -c 'StudioAnnouncementPrompt' packages/client/src/App.vue                  
 Then run the targeted suites:
 
 ```bash
-npx vitest run tests/client/device-connections-permissions.test.ts \
-  tests/client/login-view.test.ts \
-  tests/client/i18n-coverage.test.ts \
-  tests/client/chat-store-message-cache.test.ts \
-  tests/server/update-route-guard.test.ts
+npx vitest run tests/client \
+  tests/server/update-route-guard.test.ts \
+  tests/server/app-upload.test.ts
 ```
 
 A green run here plus `npm run harness:check` is the minimum bar before
 deploying a merge.
+
+## Test suite policy after upstream v0.8.15
+
+Upstream removed the legacy suite in `081b9393f` (2026-11-02, "reset legacy
+tests and simplify CI"): `tests/` went from ~1084 files to a handful of
+focused tests, and `tests/README.md` says not to restore the old suite. This
+fork follows that, but keeps a curated set that guards the fork customizations
+themselves (topic → file):
+
+| Guard | File |
+| --- | --- |
+| local message cache | `tests/client/chat-store-message-cache.test.ts` |
+| pending-session branding | `tests/client/chat-agent-avatar.test.ts` |
+| brand + locale parity | `tests/client/i18n-coverage.test.ts` |
+| login page branding | `tests/client/login-view.test.ts` |
+| hidden device-connections surface | `tests/client/device-connections-permissions.test.ts` |
+| hidden `opencode-free` provider | `tests/client/system-available-models-hide.test.ts` |
+| trimmed page-sidebar navigation | `tests/client/page-sidebar-management-navigation.test.ts` |
+| theme surface baseline | `tests/client/ui-theme-harness.test.ts` |
+| locked-IP settings gate | `tests/client/account-settings-locked-ips-permission.test.ts` |
+| composer draft + eager uploads | `tests/client/chat-input-draft.test.ts` |
+| app sidebar trimming | `tests/client/sidebar-search.test.ts` |
+| `POST /api/studio/update` guard | `tests/server/update-route-guard.test.ts` |
+| chunked app uploads | `tests/server/app-upload.test.ts` |
+
+`tests/setup.ts` (restored with `setupFiles` in `vitest.config.ts`) provides
+`__APP_VERSION__`, `window.matchMedia` and an isolated `HERMES_WEB_UI_HOME`
+for these, since upstream's setup file was removed as well. Everything else
+keeps upstream's focused-test rule: a new fork feature adds its own small test
+next to it rather than reviving the blanket suite.

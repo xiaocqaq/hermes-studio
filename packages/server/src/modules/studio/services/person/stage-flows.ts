@@ -10,6 +10,7 @@ import { recordSessionAttention } from '../../repositories/session-state-store'
 import { personRuntime } from '../../public/person-runtime'
 import { personUser } from './catalog'
 import { logger } from '../../public/logging'
+import { personTurnWorkspace, requirePersonWorkspace } from './workspace'
 
 const activeTurns = new Map<string, Set<AbortController>>()
 export function registerPersonStageTurn(context: PersonStageContext) {
@@ -20,6 +21,7 @@ export function registerPersonStageTurn(context: PersonStageContext) {
 }
 
 export function createPersonFlow(userId: number, input: Record<string, unknown>, origin?: PersonTaskOrigin) {
+  if (Object.hasOwn(input,'acceptance') || (Array.isArray(input.stages) && input.stages.some(stage => stage && Object.hasOwn(stage,'acceptance')))) throw personError('Direct stage acceptance is unavailable; enable acceptance on background subtasks')
   if (Object.keys(input).some(key => !['action','session_id','title','goal','stages','idempotency_key'].includes(key))) throw personError('Unknown flow field')
   if (origin && input.session_id && input.session_id !== origin.sessionId) throw personError('Creator is assigned by the host',403)
   const creator = requirePersonSession(userId, origin?.sessionId || personText(input.session_id, 'session_id',100)).id
@@ -47,6 +49,7 @@ export function createPersonFlow(userId: number, input: Record<string, unknown>,
       throw Object.assign(personError('A role cannot hand off to itself. Finish your own work here, then route only to another role.'),{code:'SELF_HANDOFF'})
   }
   const key = personText(input.idempotency_key,'idempotency_key',200)
+  const workspace = personTurnWorkspace(userId, creator, origin)
   const result = personOperation(userId, `flow:${key}`, { ...input, creator }, () => {
     requirePersonSession(userId,creator)
     const db = personDb(), id = randomUUID(), now = Date.now()
@@ -55,7 +58,8 @@ export function createPersonFlow(userId: number, input: Record<string, unknown>,
       AND t.status NOT IN ('completed','closed')`).get(userId,creator,origin.runId)) {
       throw Object.assign(personError('Wait for this turn\'s worker result before handing off its work.',409),{code:'WORK_PENDING'})
     }
-    db.prepare('INSERT INTO person_flows(id,owner_user_id,creator_session_id,title,goal,created_at,updated_at) VALUES(?,?,?,?,?,?,?)').run(id,userId,creator,title,goal,now,now)
+    requirePersonWorkspace(workspace)
+    db.prepare('INSERT INTO person_flows(id,owner_user_id,creator_session_id,title,goal,created_at,updated_at,workspace) VALUES(?,?,?,?,?,?,?,?)').run(id,userId,creator,title,goal,now,now,workspace)
     steps.forEach((step, position) => {
       requirePersonSession(userId,step.session_id)
       db.prepare('INSERT INTO person_stages(id,flow_id,position,group_position,session_id,goal,return_expectation,state) VALUES(?,?,?,?,?,?,?,?)')
@@ -71,7 +75,7 @@ export function createPersonFlow(userId: number, input: Record<string, unknown>,
 
 function stageHasWork(stageId: string) {
   return !!personDb().prepare(`SELECT 1 FROM person_stage_tasks l JOIN session_tasks t ON t.id=l.task_id WHERE l.stage_id=? AND
-    (t.status NOT IN ('completed','closed') OR EXISTS(SELECT 1 FROM person_executions e WHERE e.task_id=t.id
+    (t.status NOT IN ('completed','closed') OR (json_extract(t.requirements_json,'$.acceptance.enabled')=1 AND NOT EXISTS(SELECT 1 FROM person_executions ae JOIN person_acceptance_passes a ON a.execution_id=ae.id WHERE ae.task_id=t.id AND ae.requirements_revision=t.requirements_revision AND ae.rowid=(SELECT MAX(last.rowid) FROM person_executions last WHERE last.task_id=t.id) AND ae.state='finished')) OR EXISTS(SELECT 1 FROM person_executions e WHERE e.task_id=t.id
       AND e.state IN ('pending','queued','starting','running','stopping','waiting_person','waiting_user','waiting_approval')))`).get(stageId)
 }
 
@@ -99,7 +103,7 @@ export async function controlPersonFlow(userId: number, input: Record<string, un
     if (action === 'complete') {
       if (!origin?.stage || origin.stage.flowId !== id || !origin.runId) throw personError('Complete the stage from its assigned live turn',403)
       const { stage } = assertPersonStage(userId,origin.stage,origin.sessionId)
-      if (stageHasWork(stage.id)) throw personError('Finish or explicitly close the stage subtask before completing',409)
+      if (stageHasWork(stage.id)) throw personError('Finish or explicitly close the stage subtask before completing; acceptance-enabled children must pass independent verification',409)
       if (stage.completion_run_id && stage.completion_run_id !== origin.runId) throw personError('Stage completion is already being saved',409)
       db.prepare('UPDATE person_stages SET completion_run_id=? WHERE id=?').run(origin.runId,stage.id)
     } else {
@@ -214,6 +218,7 @@ export async function deliverPersonStages() {
     try {
       const context = stageDeliveryContext(row.owner_user_id,row.id)
       const { flow, stage } = assertPersonStage(row.owner_user_id,context)
+      requirePersonWorkspace(flow.workspace)
       personStageSources(row.owner_user_id,context)
       const deliver = personRuntime().deliverStage
       if (!deliver) throw new Error('Stage delivery runtime unavailable')

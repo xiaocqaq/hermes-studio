@@ -1119,9 +1119,6 @@
       "unowned-background | .agent-logo | background: rgba(255, 255, 255, 0.92)": 1,
       "unowned-background | :global(.agent-ai-help-error) | background: rgba(127, 127, 127, 0.1)": 1
     },
-    "packages/client/src/views/hermes/ApiRelayView.vue": {
-      "unowned-background | .api-relay-features span | background: $bg-secondary": 1
-    },
     "packages/client/src/views/hermes/GroupChatLinkView.vue": {
       "literal-color | .link-card | box-shadow: 0 22px 70px rgba(0, 0, 0, 0.16)": 1,
       "unowned-background | .agent-config-form | background: $bg-primary": 1,

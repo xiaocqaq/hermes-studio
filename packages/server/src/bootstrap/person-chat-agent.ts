@@ -25,7 +25,7 @@ export function createPersonAgent(options: PersonChatAgentOptions) {
           instruction: 'Only an actual user response supplies a decision. An empty response is not approval.' }
       : await tool.execute(args, context.sessionId ? { sessionId: context.sessionId, runId: context.runId || '', messages: originMessages,
         ...(options.stage ? { stage:options.stage } : {}),
-        ...(options.returnExecutionId ? { returnExecutionId: options.returnExecutionId } : {}),
+        ...(options.returnExecutionId ? { returnExecutionId: options.returnExecutionId, acceptanceReturnId: options.acceptanceReturnId } : {}),
         ...(memoryRequest ? { memoryRequest } : {}) } : undefined)
     const content = JSON.stringify(value)
     if (content.length > 18000) throw new Error('Tool result too large; request a smaller page')
@@ -80,7 +80,8 @@ export function createPersonAgent(options: PersonChatAgentOptions) {
       recallScopes: options.memory.identity.recallScopes, writeScopes: options.memory.identity.writeScopes,
       defaultWriteScope: options.memory.identity.defaultWriteScope,
     } : undefined,
-    toolContext: options.memory ? { ...input.toolContext, sessionId: options.memory.identity.sessionId, profileId: options.memory.identity.profileId } : input.toolContext,
+    toolContext: { ...input.toolContext, cwd: options.workspace, workspaceRoot: options.workspace, workspaceId: options.workspace,
+      ...(options.memory ? { sessionId: options.memory.identity.sessionId, profileId: options.memory.identity.profileId } : {}) },
     skillReviewEnabled: false, backgroundDelegationEnabled: false,
     ephemeralContext: true, contextKey: undefined,
   })

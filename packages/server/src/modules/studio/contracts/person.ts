@@ -22,6 +22,8 @@ export interface PersonTaskOrigin {
   runId: string
   messages: AgentMessage[]
   returnExecutionId?: string
+  /** Host identity for an acceptance decision returned after the initial worker callback. */
+  acceptanceReturnId?: string
   stage?: import('./person-stage').PersonStageContext
   /** Host-bound user request; copied into exactly one execution's delivery. */
   memoryRequest?: PersonTaskMemoryRequest
@@ -41,6 +43,7 @@ export interface PersonSettings {
   compressionThreshold: number | null
   agents: PersonAgentPreset[]
   maxConcurrentTasks: number
+  taskTimeoutMinutes: number
 }
 export interface PersonTask {
   id: string
@@ -61,15 +64,23 @@ export interface PersonTask {
   created_at: number
   updated_at: number
   running?: boolean | number
+  acceptance_state?: import('./person-acceptance').PersonAcceptanceState | null
+  acceptance_reason?: string | null
   execution_id?: string | null
+  execution_selection_json?: string | null
   execution_state?: PersonRunState | 'idle'
   pending_count?: number
+  redirect_state?: 'waiting' | 'cancelling' | 'completed' | 'cancelled' | null
+  redirect_error?: string | null
 }
 export interface PersonExecution {
+  /** Fixed at admission; Bot settings and role transfers never rewrite this path. */
+  workspace: string
   id: string; task_id: string; owner_user_id: number; requirements_revision: number
   state: PersonRunState; input_json: string; session_id: string; selection_json: string; output: string
   error: string; generation: number
   lease_until: number; created_at: number; updated_at: number; occurrence_id: string | null
+  queue_priority?: number; insertion_queue_id?: string; insertion_phase?: string; insertion_error?: string
 }
 export interface PersonInteraction {
   id: string; owner_user_id: number; task_id: string; execution_id: string
@@ -78,6 +89,7 @@ export interface PersonInteraction {
   revision: number; created_at: number
 }
 export interface PersonSchedule {
+  session_title?: string | null; bot_type?: string | null; task_title?: string | null; task_goal?: string | null
   id: string; owner_user_id: number; mode: 'assistant' | 'worker'; task_id: string | null
   session_id: string; title: string; goal: string; kind: 'once' | 'cron'; expression: string
   timezone: string; next_at: number; state: 'active' | 'paused' | 'cancelled' | 'exhausted'
@@ -85,7 +97,7 @@ export interface PersonSchedule {
 }
 export const PERSON_DEFAULTS: PersonSettings = {
   model: null, reasoningEffort: '', timezone: 'Asia/Shanghai', maxSteps: 12,
-  agents: [], maxConcurrentTasks: 6, compressionThreshold: null, workspace: '',
+  agents: [], maxConcurrentTasks: 6, taskTimeoutMinutes: 60, compressionThreshold: null, workspace: '',
 }
 export function personError(message: string, status = 400): Error & { status: number } {
   return Object.assign(new Error(message), { status })

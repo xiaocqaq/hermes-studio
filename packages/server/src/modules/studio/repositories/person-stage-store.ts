@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PersonConversationFlow, PersonStage, PersonStageContext, PersonStageDelivery } from '../contracts/person-stage'
 import { personError } from '../contracts/person'
-import { getPersonTask, personDb, personTransaction } from './person-store'
+import { getPersonTask, personDb, personTransaction, personSettings, taskExecutionJoin } from './person-store'
 import { requirePersonSession } from './person-session-store'
 
 /** Only an outstanding handoff keeps its recipient active, never the waiting creator. */
@@ -34,6 +34,20 @@ export function listPersonFlows(userId: number, sessionId = '', offset = 0) {
   return personDb().prepare(`SELECT f.id FROM person_flows f WHERE owner_user_id=? AND
     (?='' OR creator_session_id=? OR EXISTS(SELECT 1 FROM person_stages s WHERE s.flow_id=f.id AND s.session_id=?))
     ORDER BY updated_at DESC,id LIMIT 50 OFFSET ?`).all(userId, sessionId, sessionId, sessionId, offset).map(row => getPersonFlow(userId, String(row.id)))
+}
+/** Activity is independent of the history page, which may contain only settled flows. */
+export function personFlowActivity(userId: number, sessionId: string) {
+  const db = personDb()
+  const where = `f.owner_user_id=? AND f.creator_session_id=? AND f.state='active'
+    AND NOT EXISTS(SELECT 1 FROM person_stages s WHERE s.flow_id=f.id AND s.state='failed')
+    AND NOT EXISTS(SELECT 1 FROM person_stage_deliveries d WHERE d.flow_id=f.id AND d.generation=f.generation AND d.error!='')
+    AND NOT EXISTS(SELECT 1 FROM person_stage_tasks l JOIN person_stages s ON s.id=l.stage_id
+      JOIN session_tasks t ON t.id=l.task_id ${taskExecutionJoin}
+      WHERE s.flow_id=f.id AND s.state!='completed' AND t.status='open' AND selected_execution.state IN ('failed','interrupted'))`
+  const params = [userId, sessionId]
+  const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM person_flows f WHERE ${where}`).get(...params)!.n)
+  const ids = db.prepare(`SELECT f.id FROM person_flows f WHERE ${where} ORDER BY updated_at DESC,id LIMIT 50`).all(...params)
+  return { active_flow_count: count, active_flows: ids.map(row => getPersonFlow(userId, String(row.id))) }
 }
 export function assertPersonStage(userId: number, context: PersonStageContext, sessionId?: string) {
   const flow = getPersonFlow(userId, context.flowId)
@@ -103,8 +117,8 @@ export function enqueuePersonStage(userId: number, stage: PersonStage, generatio
 export function enqueuePersonScheduledStage(userId: number, sessionId: string, title: string, goal: string) {
   requirePersonSession(userId, sessionId)
   const db = personDb(), id = randomUUID(), now = Date.now()
-  db.prepare('INSERT INTO person_flows(id,owner_user_id,creator_session_id,title,goal,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
-    .run(id, userId, sessionId, title, goal, now, now)
+  db.prepare('INSERT INTO person_flows(id,owner_user_id,creator_session_id,title,goal,created_at,updated_at,workspace) VALUES(?,?,?,?,?,?,?,?)')
+    .run(id, userId, sessionId, title, goal, now, now, personSettings(userId, sessionId).settings.workspace)
   db.prepare("INSERT INTO person_stages(id,flow_id,position,session_id,goal,return_expectation,state) VALUES(?,?,0,?,?,?,'active')")
     .run(randomUUID(), id, sessionId, goal, 'Complete the saved scheduled goal and report the new result. Use a background worker only when needed.')
   const flow = getPersonFlow(userId, id)

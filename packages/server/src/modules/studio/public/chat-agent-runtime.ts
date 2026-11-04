@@ -36,6 +36,7 @@ export interface ChatAgentRuntimeDependencies {
   ekkoAgentReasoningText(...args: any[]): string
   normalizeEkkoAgentReasoning(...args: any[]): any
   serializeEkkoAgentReasoningDetails(...args: any[]): any
+  pendingEkkoInteractions(sessionId: string): Array<{ event: string; data: any }>
   waitForEkkoToolApproval(...args: any[]): Promise<any>
   waitForEkkoClarification(...args: any[]): Promise<any>
   getCodingAgentMcpServers(id: string, profile: string): Record<string, unknown>
@@ -114,3 +115,5 @@ export const respondToChatEkkoClarification = (...args: any[]) => configured().r
 export const closeChatEkkoBrowserSession = (sessionKey: string) => configured().closeEkkoBrowserSession(sessionKey)
 
 export const getChatCodingAgentMcpServers = (id: string, profile: string) => configured().getCodingAgentMcpServers(id, profile)
+
+export const pendingChatEkkoInteractions = (sessionId: string): Array<{ event: string; data: any }> => configured().pendingEkkoInteractions(sessionId)
