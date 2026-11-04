@@ -108,7 +108,10 @@ echo "    首页      -> 200? $([ "${CODE}" = 200 ] && echo ok || echo "FAIL(${C
 echo "    入口      -> ${AFTER_BUNDLE}"
 echo "    /chat     -> $(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --resolve "${SITE}:443:127.0.0.1" "https://${SITE}/chat")"
 echo "    /settings -> $(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 --resolve "${SITE}:443:127.0.0.1" "https://${SITE}/settings")"
-echo "    vhost root:"; grep -n 'root /www/sites' /opt/1panel/www/conf.d/${SITE}.conf | sed 's/^/      /'
+# 2026-11-04：releases root 已不固定在 ${SITE}.conf（外层只反代到 18650，真正的
+# root 在内层回源配置里，例如 zz-safeline-internal.conf），所以这里在 conf.d/*.conf
+# 里搜，和接收端的探测逻辑保持一致。
+echo "    vhost root:"; grep -rn "root /www/sites/${SITE}/index/releases" /opt/1panel/www/conf.d/*.conf | tail -2 | sed 's/^/      /'
 if [ "$AFTER_BUNDLE" != "$BUNDLE" ]; then
   echo "!! 线上入口 ($AFTER_BUNDLE) 与本次构建 ($BUNDLE) 不一致" >&2
   exit 1
