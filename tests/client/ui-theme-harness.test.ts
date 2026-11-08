@@ -148,5 +148,5 @@ describe('frontend UI theme harness', () => {
 
   it('accepts the current client tree with its reviewed legacy inventory', async () => {
     expect(await checkUiTheme(resolve(import.meta.dirname, '../..'))).toEqual([])
-  }, 30_000) // Full-tree parsing under coverage competes with other CI workers.
+  }, 120_000) // Full-tree parsing competes with other CPU work on a loaded host.
 })

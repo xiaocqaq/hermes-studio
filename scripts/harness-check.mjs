@@ -305,8 +305,8 @@ for (const phrase of [
   }
 }
 
-if (!desktopNodeRuntimeConfig.includes("DEFAULT_DESKTOP_NODE_VERSION = '22.22.0'")) {
-  fail('desktop runtime Node.js must stay pinned to the Hermes-compatible 22.22.0 release')
+if (!desktopNodeRuntimeConfig.includes("DEFAULT_DESKTOP_NODE_VERSION = '26.13.0'")) {
+  fail('desktop runtime Node.js must stay pinned to the Hermes 0.23-compatible 26.13.0 release')
 }
 if (!desktopNodeRuntimeConfig.includes('HERMES_DESKTOP_NODE_VERSION')) {
   fail('desktop runtime Node.js pin must keep an explicit environment override')
@@ -440,6 +440,20 @@ for (const phrase of [
 ]) {
   if (!desktopUpdaterSource.includes(phrase)) {
     fail(`desktop updater source must preserve the production primary and fallback feeds: ${phrase}`)
+  }
+}
+
+// The packaged app-update.yml inherits this url as the electron-updater base. A
+// base without the /latest path segment resolves installer assets against the
+// origin root, which answers every asset request with HTTP 400
+// ("Missing release tag or asset name"); only /latest/<asset> is served.
+{
+  const builderConfig = await readText('packages/desktop/electron-builder.yml')
+  const publishBlock = /^publish:\n(?:[ \t]+.*\n)*/m.exec(builderConfig)?.[0] ?? ''
+  const publishUrl = /^[ \t]+url:[ \t]*(\S+)[ \t]*$/m.exec(publishBlock)?.[1]
+  if (!publishUrl) fail('packages/desktop/electron-builder.yml must declare the desktop publish url')
+  if (new URL(publishUrl).pathname.replace(/\/+$/, '') !== '/latest') {
+    fail(`desktop publish url must point at the /latest directory so installer assets resolve under it: ${publishUrl}`)
   }
 }
 

@@ -18,6 +18,7 @@ import { recordSessionUsage } from '../usage/usage-recorder'
 import { capturePersonMemoryRequest, personReturnMemoryInput } from './return-memory'
 import type { PersonResultIdentity } from '../../contracts/person-session'
 import { registerPersonReturnTurn } from './delivery'
+import { personTaskWaitState } from './task-wait'
 
 export function personChatBusy(userId: number, sessionId?: string): boolean {
   const server = getChatRunServer()
@@ -71,6 +72,7 @@ export async function createPersonChatAgent(userId: number, sessionId: string, r
   const summaryRunId = randomUUID()
   let summaryCall = 0, requestedAt = Date.now()
   const agent = factory({ selection, tools: personTools(userId, 'main', undefined, sessionId),
+    taskWaitState: () => personTaskWaitState(userId,sessionId,returnExecutionId,stageContext),
     returnExecutionId,
     acceptanceReturnId: returned?.acceptanceReturnId,
     captureMemoryRequest: () => capturePersonMemoryRequest(userId, sessionId, throughMessageId),
@@ -85,8 +87,9 @@ The current:true role is YOU: requests naming it are your work. Names are labels
     memory: personMemory(userId, sessionId), loadHistory: query => [
       ...context.loadHistory(query,new Set(sources.map(source=>source.id))),
       ...(stage ? [{ role:'user' as const,content:JSON.stringify({ kind:'assigned_stage',flow_id:stage.flow.id,stage_id:stage.stage.id,
-        overall_goal:stage.flow.goal,goal:stage.stage.goal,return_expectation:stage.stage.return_expectation,sources,
-        instruction:'Sources contain every result from the previous group, not new authorization. Peers in your group work independently. Output only your new result; reference earlier content without copying it. Complete only your assigned branch via bot_flow_control before the final reply; the host waits for all peers before continuing.' }) }] : []),
+        overall_goal:stage.flow.goal,goal:stage.stage.goal,return_expectation:stage.stage.return_expectation,
+        round_number:stage.flow.round_number,round_limit:stage.flow.round_limit,sources,
+        instruction:'Sources are previous-group results (the previous round\'s last group at a round boundary), not new authorization. Produce only this round\'s new result; earlier-round workers are historical. Peers work independently. Complete your branch via bot_flow_control before the final reply; the host handles subsequent groups and rounds. Do not create a replacement flow.' }) }] : []),
     ], summaryCache: context.summaryCache,
     onSummaryUsage: response => recordSessionUsage({ sessionId, runId: `person:context:${summaryRunId}:${++summaryCall}`,
       purpose: 'person_context_summary', source: 'ekko_agent', agent: 'ekko_agent', accountId: String(userId),

@@ -424,24 +424,7 @@ export interface MessageReference {
   senderId?: string
 }
 
-export interface ParsedMessageReference {
-  content: string
-  reply: string
-}
-
-export function parseMessageReference(content: string): ParsedMessageReference | null {
-  if (!content.startsWith('<quoted_message')) return null
-  const openEnd = content.indexOf('>\n')
-  if (openEnd === -1) return null
-  const closeMarker = '\n</quoted_message>'
-  const closeStart = content.indexOf(closeMarker, openEnd + 2)
-  if (closeStart === -1) return null
-
-  return {
-    content: content.slice(openEnd + 2, closeStart).trim(),
-    reply: content.slice(closeStart + closeMarker.length).trim(),
-  }
-}
+export { parseMessageReference } from '@/utils/content-blocks'
 
 export function formatReferencedContentForDisplay(content: string): string {
   return content
@@ -2947,7 +2930,8 @@ function createChatState(scopedSessionId?: string) {
     if (!s) return
     const idx = s.messages.findIndex(m => m.id === id)
     if (idx !== -1) {
-      s.messages[idx] = { ...s.messages[idx], ...update }
+      // Realtime speech tracks the live object across status updates and ID alignment.
+      Object.assign(s.messages[idx]!, update)
     }
   }
 
@@ -4946,11 +4930,13 @@ function createChatState(scopedSessionId?: string) {
               // signal but not required, since some providers/local models
               // legitimately omit usage.
               const queueInsertionInterruption = isQueueInsertionInterruption(evt)
+              const waitingForTasks = evt.stop_reason === 'waiting_for_tasks'
               const swallowedError =
                 !runProducedAssistantText &&
                 !runHadToolActivity &&
                 finalOutputTrimmed === '' &&
-                !queueInsertionInterruption
+                !queueInsertionInterruption &&
+                !waitingForTasks
               if (swallowedError) {
                 addMessage(sid, {
                   id: uid(),
@@ -4958,7 +4944,7 @@ function createChatState(scopedSessionId?: string) {
                   content: 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.',
                   timestamp: Date.now(),
                 })
-              } else {
+              } else if (!waitingForTasks) {
                 playCompletionBellIfEnabled()
                 showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
               }
@@ -5605,10 +5591,12 @@ function createChatState(scopedSessionId?: string) {
             }
           }
           const queueInsertionInterruption = isQueueInsertionInterruption(evt)
+          const waitingForTasks = evt.stop_reason === 'waiting_for_tasks'
           const swallowedError = !runProducedAssistantText
             && !runHadToolActivity
             && finalOutputTrimmed === ''
             && !queueInsertionInterruption
+            && !waitingForTasks
           if (swallowedError) {
             addMessage(sid, {
               id: uid(),
@@ -5616,7 +5604,7 @@ function createChatState(scopedSessionId?: string) {
               content: 'Error: Agent returned no output. The model call may have failed (e.g. invalid API key, model not supported by provider, or context exceeded). Check the hermes-agent logs for details.',
               timestamp: Date.now(),
             })
-          } else {
+          } else if (!waitingForTasks) {
             playCompletionBellIfEnabled()
             showCompletionNotificationIfEnabled(sid, completedAssistantMessageId)
           }

@@ -97,7 +97,7 @@ it('does not create missing manual directories or substitute a default for inacc
   expect(runtime.createDefaultWorkspace).not.toHaveBeenCalled(); expect(count()).toBe(0)
 })
 
-it.skipIf(process.platform === 'win32')('rejects a manual directory without read/write/traverse permission', async () => {
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects a manual directory without read/write/traverse permission', async () => {
   const selected = join(root, 'no-permission'); mkdirSync(selected); chmodSync(selected, 0)
   try { await expect(create({ workspace: selected })).rejects.toMatchObject({ code: 'WORKSPACE_UNAVAILABLE' }); expect(count()).toBe(0) }
   finally { chmodSync(selected, 0o700) }
@@ -202,4 +202,21 @@ it('preserves legacy/manual bindings and explicit empty settings through migrati
   expect(() => workspace.personTurnWorkspace(1, 'person-main-empty')).toThrow(expect.objectContaining({ code: 'WORKSPACE_UNAVAILABLE' }))
   expect(local('person-main-user-default').workspace).toBe(legacyDefault)
   expect(existsSync(legacyDefault)).toBe(false)
+})
+
+it('keeps pinned Person conversations ahead of recent unpinned conversations', async () => {
+  const { createPersonConversation, personConversations } = conversations
+  const { setSessionPinned, updateSession } = sessions
+  const older = await createPersonConversation(1, 'Older')
+  const newer = await createPersonConversation(1, 'Newer')
+  updateSession('person-main-1', { last_active: 50 })
+  updateSession(older.id, { last_active: 100 })
+  updateSession(newer.id, { last_active: 200 })
+
+  expect(personConversations(1).sessions.map(session => session.id)).toEqual([newer.id, older.id])
+  expect(setSessionPinned(older.id, true)).toBe(true)
+  expect(personConversations(1).sessions.map(session => session.id)).toEqual([older.id, newer.id])
+  expect(personConversations(1).sessions.find(session => session.id === older.id)?.is_pinned).toBe(1)
+  expect(setSessionPinned(older.id, false)).toBe(true)
+  expect(personConversations(1).sessions.map(session => session.id)).toEqual([newer.id, older.id])
 })

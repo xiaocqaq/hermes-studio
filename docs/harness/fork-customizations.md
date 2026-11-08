@@ -123,8 +123,8 @@ Long-running Chrome sessions used to exhaust the box (3.7 GB RAM, earlyoom at
 18 %). The fork closes browser sessions aggressively:
 
 - `packages/ekko-agent/src/tools/browser.ts` — `closeAllBrowserSessions`
-- `packages/ekko-agent/src/bootstrap/lifecycle.ts`
-- `packages/server/src/modules/studio/services/chat-run/chat-agent-runtime-adapter.ts`
+- `packages/server/src/bootstrap/lifecycle.ts`
+- `packages/server/src/bootstrap/chat-agent-runtime-adapter.ts`
 - `packages/server/src/modules/studio/public/chat-agent-runtime.ts` —
   `closeChatEkkoBrowserSession`
 - `packages/server/src/modules/studio/sockets/chat-run.ts` — `releaseBrowserSession`

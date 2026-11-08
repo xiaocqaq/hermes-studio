@@ -32,7 +32,9 @@ if (typeof window !== 'undefined') {
     })),
   })
 
-  // Mock localStorage
+  // Only stub localStorage when the environment does not provide a real one
+  // (jsdom does). Faking it breaks tests that spy on Storage.prototype.setItem.
+  if (!window.localStorage) {
   const store: Record<string, string> = {}
   Object.defineProperty(window, 'localStorage', {
     value: {
@@ -44,4 +46,5 @@ if (typeof window !== 'undefined') {
       key: vi.fn((i: number) => Object.keys(store)[i] ?? null),
     },
   })
+  }
 }

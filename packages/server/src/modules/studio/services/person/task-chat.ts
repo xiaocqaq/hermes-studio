@@ -8,7 +8,7 @@ import { getPersonTask, getPersonExecution, taskPersonConversations, personDb, p
 import { getSession } from '../../repositories/session-store'
 import { personUpdated } from '../../repositories/person-updates'
 import { personUser, validatePersonSelection } from './catalog'
-import { savePersonTaskOrigin, assertPersonDeliveryOrigin } from './delivery'
+import { savePersonTaskOrigin, savePersonManualFollowup, assertPersonDeliveryOrigin } from './delivery'
 import { requirePersonSession } from '../../repositories/person-session-store'
 import { personRequirements } from '../../contracts/person-flow'
 import { assertPersonTaskActor } from './task-flow'
@@ -35,8 +35,8 @@ export async function personTaskChat(userId: number, taskId: string, executionId
   const user = personUser(userId)
   if (user.role !== 'super_admin' && !user.profiles.includes(selection.profile || 'default')) throw personError('Resource permission revoked', 403)
   const selectedId = executionId || task.execution_id
-  const read = (id: string) => personDb().prepare('SELECT id,session_id,state,created_at,occurrence_id FROM person_executions WHERE owner_user_id=? AND task_id=? AND id=?')
-    .get(userId,taskId,id) as unknown as Pick<PersonExecution,'id'|'session_id'|'state'|'created_at'|'occurrence_id'> | undefined
+  const read = (id: string) => personDb().prepare('SELECT id,session_id,state,created_at,occurrence_id,selection_json FROM person_executions WHERE owner_user_id=? AND task_id=? AND id=?')
+    .get(userId,taskId,id) as unknown as Pick<PersonExecution,'id'|'session_id'|'state'|'created_at'|'occurrence_id'|'selection_json'> | undefined
   const execution = selectedId ? read(selectedId) : null
   if (selectedId && !execution) throw personError('Execution not found', 404)
   const current = task.execution_id ? read(task.execution_id) : undefined
@@ -45,7 +45,7 @@ export async function personTaskChat(userId: number, taskId: string, executionId
   if (current && !executions.some(run => run.id === current.id)) executions.unshift(current)
   // Include a selected older conversation even when it falls outside the recent page.
   if (execution && !executions.some(run => run.session_id === execution.session_id)) executions.push(execution)
-  return { task: { ...task, running: !!task.running }, session, execution: execution || null, executions, acceptance: personAcceptanceDetail(userId,taskId,execution?.id), pending: pendingPersonInputs(userId, taskId, session?.id), ...personTaskQueue(userId, taskId, session?.id || '') }
+  return { task: { ...task, execution_selection_json: execution?.selection_json || null, running: !!task.running }, session, execution: execution || null, executions, acceptance: personAcceptanceDetail(userId,taskId,execution?.id), pending: pendingPersonInputs(userId, taskId, session?.id), ...personTaskQueue(userId, taskId, session?.id || '') }
 }
 
 export function personTaskInput(value: unknown): ContentBlock[] {
@@ -61,7 +61,7 @@ export function personTaskInput(value: unknown): ContentBlock[] {
 }
 
 /** New turns still use the durable background runner and its original Person callback. */
-export async function continuePersonTask(userId: number, taskId: string, body: Record<string, unknown>, origin?: PersonTaskOrigin) {
+export async function continuePersonTask(userId: number, taskId: string, body: Record<string, unknown>, origin?: PersonTaskOrigin, manualInput?: ContentBlock[]) {
   const request = { ...body, task_id: taskId }
   const key = `task-chat:${personText(body.idempotency_key, 'idempotency_key', 200)}`
   const task = getPersonTask(userId, taskId)
@@ -87,6 +87,7 @@ export async function continuePersonTask(userId: number, taskId: string, body: R
     if (requirements.verification_for) {
       if (current.revision!==personRevision(body.expected_revision)) throw personError('Task changed; query it again',409)
       const result=queueBotVerification(userId,getPersonTask(userId,requirements.verification_for.task_id),origin)
+      if (manualInput) savePersonManualFollowup(result.execution.id, manualInput)
       return {...result,pending:pendingPersonInputs(userId,result.task.id,result.execution.session_id)}
     }
     const acceptance=current.execution_id?getPersonAcceptance(current.execution_id):undefined
@@ -99,7 +100,7 @@ export async function continuePersonTask(userId: number, taskId: string, body: R
     }
     if (requirements.flow) {
       assertPersonTaskActor(current, origin)
-      if (requirements.flow.stopped) throw personError('Flow is stopped; its creator must reopen it', 409)
+      if (requirements.flow.stopped) throw personError('Flow is stopped; reopen it before continuing', 409)
       requirements.flow.completed = false
     }
     requirePersonSession(userId, current.session_id)
@@ -117,6 +118,7 @@ export async function continuePersonTask(userId: number, taskId: string, body: R
     if (target && target.requirements_revision !== current.requirements_revision && target.session_id !== (current.execution_id ? getPersonExecution(userId,current.execution_id).session_id : undefined)) throw personError('This conversation was superseded; open the current task', 409)
     const automaticRepair=automaticAcceptance(acceptance) && acceptance?.state==='repair_required'
     const execution = enqueuePersonExecution(next, automaticRepair ? getPersonExecution(userId,acceptance.execution_id).occurrence_id : null, input, true, target?.session_id)
+    if (manualInput) savePersonManualFollowup(execution.id, manualInput)
     if (automaticRepair) {
       consumeAcceptanceDelivery(acceptance.execution_id)
       const verification=personDb().prepare('SELECT verification_execution_id FROM person_acceptance_attempts WHERE execution_id=? AND ordinal=?').get(acceptance.execution_id,acceptance.attempt)
