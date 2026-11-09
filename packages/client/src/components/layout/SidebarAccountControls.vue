@@ -8,7 +8,7 @@ import ProfileSelector from '@/components/layout/ProfileSelector.vue'
 import LanguageSwitch from '@/components/layout/LanguageSwitch.vue'
 import ThemeSwitch from '@/components/layout/ThemeSwitch.vue'
 import { changelog } from '@/data/changelog'
-import { getStoredUserId } from '@/api/client'
+import { getStoredUserId, isStoredSuperAdmin } from '@/api/client'
 import { clearThemeBackgroundCache } from '@/api/studio/theme'
 
 const emit = defineEmits<{ 'open-modal': [] }>()
@@ -18,6 +18,8 @@ const appStore = useAppStore()
 const showChangelog = ref(false)
 const showDockerUpdateTip = ref(false)
 const isDockerRuntime = computed(() => appStore.isDocker)
+// fork: only superadmins see upgrade prompts; non-admins just use the deployed build.
+const isSuperAdmin = computed(() => isStoredSuperAdmin())
 const languageThemeOverrides: GlobalThemeOverrides['Select'] = {
   peers: {
     InternalSelection: {
@@ -174,7 +176,7 @@ function handleUpdateClick() {
         <ThemeSwitch />
       </div>
       <NButton
-        v-if="appStore.clientOutdated"
+        v-if="isSuperAdmin && appStore.clientOutdated"
         type="warning"
         size="tiny"
         block
@@ -186,7 +188,7 @@ function handleUpdateClick() {
         }}
       </NButton>
       <NButton
-        v-else-if="appStore.updateAvailable"
+        v-else-if="isSuperAdmin && appStore.updateAvailable"
         type="primary"
         size="tiny"
         block

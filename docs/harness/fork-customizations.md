@@ -167,6 +167,25 @@ a stray `\r` at the end of the shebang line in
 with `SyntaxError: Invalid or unexpected token` on Windows. Do not remove those
 rules.
 
+## 11. Only super admins see upgrade prompts
+
+`packages/client/src/components/layout/SidebarAccountControls.vue` gates both the
+"refresh to v{serverVersion}" button (`appStore.clientOutdated`) and the "update to
+v{latestVersion}" button (`appStore.updateAvailable`) on `isStoredSuperAdmin()`:
+
+```vue
+<NButton v-if="isSuperAdmin && appStore.clientOutdated" ... />
+<NButton v-else-if="isSuperAdmin && appStore.updateAvailable" ... />
+```
+
+Rationale: the backend is upgraded by the operator and the frontend is redeployed
+by hand (see the handoff doc). Non-admin accounts must not be nagged into a
+refresh/upgrade they cannot complete — the update endpoint is super-admin-only
+anyway (section 8), so the buttons were a dead end for them. Version text and the
+changelog stay visible for everyone.
+
+Verification: `grep -c 'isSuperAdmin && appStore.clientOutdated' packages/client/src/components/layout/SidebarAccountControls.vue` must be `1`.
+
 ---
 
 ## Verification snippet
